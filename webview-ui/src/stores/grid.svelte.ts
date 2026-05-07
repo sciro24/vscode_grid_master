@@ -1,0 +1,348 @@
+import type { ColumnSchema, CellValue, FilterSpec, SortSpec, ColumnStats, SidecarData } from '@shared/schema.js';
+import type { InitPayload, ChunkPayload, EditAckPayload, ColumnStatsPayload } from '@shared/messages.js';
+import type { DuckDbWorkerIn, DuckDbWorkerOut } from '../workers/duckdb.worker.js';
+import { CHUNK_SIZE, MAX_CHUNKS_IN_MEMORY } from '@shared/constants.js';
+import { uiStore } from './ui.svelte.js';
+
+// LRU chunk cache: rowStart → rows
+type ChunkCache = Map<number, CellValue[][]>;
+
+class GridStore {
+  // File metadata
+  fileType = $state<'csv' | 'parquet' | 'arrow'>('csv');
+  fileName = $state('');
+  totalRows = $state(0);
+  filteredRows = $state(0);
+  totalBytes = $state(0);
+
+  // Schema & columns
+  schema = $state<ColumnSchema[]>([]);
+  hiddenCols = $state<Set<number>>(new Set());
+  colWidths = $state<Map<string, number>>(new Map());
+
+  // Grid data
+  private _cache: ChunkCache = new Map();
+  private _accessOrder: number[] = [];
+
+  // CSV-only: full dataset held in memory for inline filter/sort
+  private _csvAllRows: CellValue[][] = [];
+
+  // Viewport
+  visibleStartRow = $state(0);
+  visibleEndRow = $state(50);
+
+  // Filters & sort
+  filters = $state<FilterSpec[]>([]);
+  sort = $state<SortSpec | null>(null);
+  globalSearch = $state('');
+
+  // Selection
+  selectedCell = $state<{ row: number; col: number } | null>(null);
+  selectedRange = $state<{ r1: number; c1: number; r2: number; c2: number } | null>(null);
+
+  // Workers (DuckDB only — CSV is parsed inline in the main thread)
+  private _duckWorker: Worker | null = null;
+  private _pendingRequests = new Map<string, (rows: CellValue[][]) => void>();
+
+  // Sidecar
+  sidecar = $state<SidecarData | null>(null);
+
+  // Column stats cache
+  private _statsCache = new Map<number, ColumnStats>();
+
+  // ── Init ──────────────────────────────────────────────────────────────────
+
+  init(payload: InitPayload): void {
+    this.fileType = payload.fileType;
+    this.fileName = payload.fileName;
+    this.totalBytes = payload.totalBytes;
+    this.schema = payload.schema;
+    if (payload.sidecar) {
+      this.sidecar = payload.sidecar;
+      this._applySidecar(payload.sidecar);
+    }
+  }
+
+  setDuckWorker(duckdb: Worker): void {
+    this._duckWorker = duckdb;
+    this._duckWorker.onmessage = (e: MessageEvent<DuckDbWorkerOut>) => this._handleDuckWorkerMsg(e.data);
+  }
+
+  private _ensureDuckWorker(): boolean {
+    if (this.fileType === 'csv') {
+      // CSV never uses DuckDB. Calling this for CSV is a logic bug — bail out.
+      return false;
+    }
+    if (this._duckWorker) return true;
+    const url = (globalThis as Record<string, unknown>)['__DUCK_WORKER_URL__'] as string | undefined;
+    if (!url) { uiStore.setError('DuckDB worker URL not set'); return false; }
+    try {
+      // Use a blob: URL so the Worker is same-origin with the webview.
+      const blob = new Blob([`importScripts(${JSON.stringify(url)});`], { type: 'application/javascript' });
+      const blobUrl = URL.createObjectURL(blob);
+      this.setDuckWorker(new Worker(blobUrl));
+    } catch (e) {
+      uiStore.setError(`Could not create DuckDB worker: ${String(e)}`);
+      return false;
+    }
+    return true;
+  }
+
+  // Called by inline CSV parser in messageHandler.ts
+  receiveCsvData(schema: ColumnSchema[], allRows: CellValue[][]): void {
+    this.schema = schema;
+    this.totalRows = allRows.length;
+    this.filteredRows = allRows.length;
+    this._csvAllRows = allRows;
+    this._storeChunk(0, allRows.slice(0, CHUNK_SIZE));
+  }
+
+  loadRawBinary(buffer: ArrayBuffer, fileType: 'parquet' | 'arrow'): void {
+    this.fileType = fileType;
+    if (!this._ensureDuckWorker()) return;
+    const msg: DuckDbWorkerIn = { type: 'LOAD', payload: { buffer, fileType } };
+    this._duckWorker!.postMessage(msg, [buffer]);
+  }
+
+  // ── Data Access ───────────────────────────────────────────────────────────
+
+  getCell(row: number, col: number): CellValue {
+    const chunkStart = Math.floor(row / CHUNK_SIZE) * CHUNK_SIZE;
+    const chunk = this._cache.get(chunkStart);
+    if (!chunk) {
+      this._requestChunk(chunkStart, chunkStart + CHUNK_SIZE);
+      return null;
+    }
+    return chunk[row - chunkStart]?.[col] ?? null;
+  }
+
+  updateViewport(startRow: number, endRow: number): void {
+    this.visibleStartRow = startRow;
+    this.visibleEndRow = endRow;
+
+    const prefetchStart = Math.max(0, Math.floor(startRow / CHUNK_SIZE) - 1) * CHUNK_SIZE;
+    const prefetchEnd = (Math.floor(endRow / CHUNK_SIZE) + 2) * CHUNK_SIZE;
+
+    for (let s = prefetchStart; s < prefetchEnd; s += CHUNK_SIZE) {
+      if (!this._cache.has(s)) {
+        this._requestChunk(s, s + CHUNK_SIZE);
+      }
+    }
+  }
+
+  // ── Mutations ─────────────────────────────────────────────────────────────
+
+  setCellValue(row: number, col: number, value: CellValue): void {
+    const chunkStart = Math.floor(row / CHUNK_SIZE) * CHUNK_SIZE;
+    const chunk = this._cache.get(chunkStart);
+    if (chunk) {
+      const rowData = chunk[row - chunkStart];
+      if (rowData) rowData[col] = value;
+    }
+    uiStore.markDirty();
+  }
+
+  updateSchema(schema: ColumnSchema[]): void {
+    this.schema = schema;
+  }
+
+  // ── Filters & Sort ────────────────────────────────────────────────────────
+
+  setFilter(filter: FilterSpec): void {
+    const idx = this.filters.findIndex(f => f.colIndex === filter.colIndex);
+    if (idx >= 0) {
+      this.filters = this.filters.map((f, i) => i === idx ? filter : f);
+    } else {
+      this.filters = [...this.filters, filter];
+    }
+    this._invalidateCache();
+  }
+
+  removeFilter(colIndex: number): void {
+    this.filters = this.filters.filter(f => f.colIndex !== colIndex);
+    this._invalidateCache();
+  }
+
+  clearFilters(): void {
+    this.filters = [];
+    this._invalidateCache();
+  }
+
+  setSort(sort: SortSpec | null): void {
+    this.sort = sort;
+    this._invalidateCache();
+  }
+
+  setGlobalSearch(query: string): void {
+    this.globalSearch = query;
+  }
+
+  // ── Column ops ────────────────────────────────────────────────────────────
+
+  toggleColumnVisibility(colIndex: number): void {
+    const next = new Set(this.hiddenCols);
+    if (next.has(colIndex)) next.delete(colIndex);
+    else next.add(colIndex);
+    this.hiddenCols = next;
+  }
+
+  setColumnWidth(colName: string, width: number): void {
+    this.colWidths = new Map(this.colWidths).set(colName, width);
+  }
+
+  get visibleSchema(): ColumnSchema[] {
+    return this.schema.filter(c => !this.hiddenCols.has(c.index));
+  }
+
+  // ── Message handlers ──────────────────────────────────────────────────────
+
+  receiveChunk(payload: ChunkPayload): void {
+    const { requestId, chunk, filteredTotal } = payload;
+    this._storeChunk(chunk.startRow, chunk.rows);
+    if (filteredTotal !== undefined) this.filteredRows = filteredTotal;
+
+    const resolve = this._pendingRequests.get(requestId);
+    if (resolve) {
+      resolve(chunk.rows);
+      this._pendingRequests.delete(requestId);
+    }
+  }
+
+  handleEditAck(payload: EditAckPayload): void {
+    if (!payload.success) {
+      uiStore.setError(`Edit failed: ${payload.error ?? 'unknown error'}`);
+    }
+  }
+
+  receiveColumnStats(payload: ColumnStatsPayload): void {
+    this._statsCache.set(payload.stats.colIndex, payload.stats);
+  }
+
+  handleExportPath(_fsPath: string): void {}
+
+  // ── Private ───────────────────────────────────────────────────────────────
+
+  private _requestChunk(startRow: number, endRow: number): void {
+    if (this.fileType === 'csv') {
+      this._serveCsvChunk(startRow, endRow);
+      return;
+    }
+
+    if (!this._ensureDuckWorker()) return;
+    const requestId = `chunk-${startRow}-${Date.now()}`;
+    const effectiveEndRow = Math.min(endRow, this.totalRows > 0 ? this.totalRows : endRow);
+    const msg: DuckDbWorkerIn = {
+      type: 'GET_CHUNK',
+      payload: {
+        requestId,
+        startRow,
+        endRow: effectiveEndRow,
+        filters: this.filters.length > 0 ? this.filters : undefined,
+        sort: this.sort ?? undefined,
+      },
+    };
+    this._duckWorker!.postMessage(msg);
+  }
+
+  private _serveCsvChunk(startRow: number, endRow: number): void {
+    let rows = this._csvAllRows;
+
+    if (this.filters.length > 0) {
+      rows = rows.filter(row => this.filters.every(f => applyFilter(row, f)));
+    }
+
+    if (this.sort) {
+      const { colIndex, direction } = this.sort;
+      rows = [...rows].sort((a, b) => compareValues(a[colIndex], b[colIndex], direction));
+    }
+
+    this.filteredRows = rows.length;
+    const sliced = rows.slice(startRow, Math.min(endRow, rows.length));
+    this._storeChunk(startRow, sliced);
+  }
+
+  private _storeChunk(startRow: number, rows: CellValue[][]): void {
+    this._cache.set(startRow, rows);
+    this._accessOrder = [...this._accessOrder.filter(k => k !== startRow), startRow];
+
+    while (this._accessOrder.length > MAX_CHUNKS_IN_MEMORY) {
+      const evict = this._accessOrder.shift()!;
+      this._cache.delete(evict);
+    }
+  }
+
+  private _invalidateCache(): void {
+    this._cache.clear();
+    this._accessOrder = [];
+    this._requestChunk(this.visibleStartRow, this.visibleEndRow + CHUNK_SIZE);
+  }
+
+  private _handleDuckWorkerMsg(msg: DuckDbWorkerOut): void {
+    switch (msg.type) {
+      case 'READY':
+        this.schema = msg.payload.schema;
+        this.totalRows = msg.payload.totalRows;
+        this.filteredRows = msg.payload.totalRows;
+        this._requestChunk(0, CHUNK_SIZE);
+        uiStore.setLoading(false);
+        break;
+
+      case 'CHUNK': {
+        const { requestId, rows, startRow, filteredTotal } = msg.payload;
+        this._storeChunk(startRow, rows);
+        this.filteredRows = filteredTotal;
+        const resolve = this._pendingRequests.get(requestId);
+        if (resolve) {
+          resolve(rows);
+          this._pendingRequests.delete(requestId);
+        }
+        break;
+      }
+
+      case 'ERROR':
+        uiStore.setError(msg.payload.message);
+        break;
+    }
+  }
+
+  private _applySidecar(sidecar: SidecarData): void {
+    for (const [name, width] of Object.entries(sidecar.columnWidths)) {
+      this.colWidths.set(name, width);
+    }
+  }
+}
+
+// ── Filter/sort helpers (mirrors csv.worker.ts logic) ─────────────────────────
+
+function applyFilter(row: CellValue[], f: FilterSpec): boolean {
+  const cell = row[f.colIndex];
+  const val = f.value;
+  switch (f.op) {
+    case 'eq':           return cell == val;
+    case 'neq':          return cell != val;
+    case 'contains':     return String(cell ?? '').toLowerCase().includes(String(val).toLowerCase());
+    case 'not_contains': return !String(cell ?? '').toLowerCase().includes(String(val).toLowerCase());
+    case 'gt':           return Number(cell) > Number(val);
+    case 'lt':           return Number(cell) < Number(val);
+    case 'gte':          return Number(cell) >= Number(val);
+    case 'lte':          return Number(cell) <= Number(val);
+    case 'regex':        return new RegExp(String(val), 'i').test(String(cell ?? ''));
+    case 'is_null':      return cell === null;
+    case 'is_not_null':  return cell !== null;
+    default:             return true;
+  }
+}
+
+function compareValues(a: CellValue, b: CellValue, dir: 'asc' | 'desc'): number {
+  const aNum = Number(a);
+  const bNum = Number(b);
+  let cmp: number;
+  if (!isNaN(aNum) && !isNaN(bNum)) {
+    cmp = aNum - bNum;
+  } else {
+    cmp = String(a ?? '').localeCompare(String(b ?? ''));
+  }
+  return dir === 'asc' ? cmp : -cmp;
+}
+
+export const gridStore = new GridStore();

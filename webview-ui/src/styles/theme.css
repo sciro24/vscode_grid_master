@@ -1,0 +1,126 @@
+/*
+ * Grid Master — Theme
+ *
+ * Maps VS Code CSS variables to --gm-* semantic tokens.
+ * Automatically follows dark/light theme because VS Code injects
+ * --vscode-* vars into the webview's :root at runtime.
+ *
+ * No media queries needed: VS Code handles dark/light switching
+ * by changing the injected variable values.
+ */
+
+:root {
+  /* ── Background surfaces ──────────────────────────────────────────────── */
+  --gm-bg:             var(--vscode-editor-background, #1e1e1e);
+  --gm-toolbar-bg:     var(--vscode-editorGroupHeader-tabsBackground, #252526);
+  --gm-statusbar-bg:   var(--vscode-statusBar-background, #007acc);
+  --gm-menu-bg:        var(--vscode-menu-background, #2d2d2d);
+
+  /* Cell backgrounds — alternating rows like Modern CSV */
+  --gm-cell-bg:        var(--vscode-editor-background, #1e1e1e);
+  --gm-cell-bg-alt:    color-mix(in srgb, var(--vscode-editor-background) 85%, white 15%);
+
+  /* Header */
+  --gm-header-bg:       var(--vscode-editorGroupHeader-tabsBackground, #252526);
+  --gm-header-bg-focus: color-mix(in srgb, var(--vscode-focusBorder, #007acc) 15%, var(--gm-header-bg));
+
+  /* ── Foreground ───────────────────────────────────────────────────────── */
+  --gm-fg:             var(--vscode-editor-foreground, #d4d4d4);
+  --gm-fg-muted:       var(--vscode-descriptionForeground, #8c8c8c);
+  --gm-fg-subtle:      color-mix(in srgb, var(--gm-fg-muted) 60%, transparent);
+  --gm-header-fg:      var(--vscode-editor-foreground, #d4d4d4);
+
+  /* ── Interactive ──────────────────────────────────────────────────────── */
+  --gm-accent:         var(--vscode-focusBorder, #007acc);
+  --gm-accent-hover:   color-mix(in srgb, var(--gm-accent) 80%, white 20%);
+  --gm-accent-light:   color-mix(in srgb, var(--gm-accent) 15%, transparent);
+  --gm-hover-bg:       var(--vscode-list-hoverBackground, rgba(255,255,255,0.06));
+
+  /* ── Borders ──────────────────────────────────────────────────────────── */
+  --gm-border:         var(--vscode-panel-border, rgba(255,255,255,0.1));
+
+  /* ── Inputs ───────────────────────────────────────────────────────────── */
+  --gm-input-bg:       var(--vscode-input-background, #3c3c3c);
+
+  /* ── State / semantic ─────────────────────────────────────────────────── */
+  --gm-danger:         var(--vscode-errorForeground, #f48771);
+  --gm-success:        #4ec9b0;
+  --gm-null-color:     var(--gm-fg-subtle);
+  --gm-num-color:      #b5cea8;  /* greenish, like VS Code numeric literals */
+  --gm-search-highlight: color-mix(in srgb, var(--vscode-editor-findMatchHighlightBackground, #ea5c0055) 80%, transparent);
+
+  /* ── Filter chips ─────────────────────────────────────────────────────── */
+  --gm-chip-bg:        color-mix(in srgb, var(--gm-accent) 10%, var(--gm-toolbar-bg));
+
+  /* ── Type badges ──────────────────────────────────────────────────────── */
+  --gm-type-string-bg:  rgba(86, 156, 214, 0.15);
+  --gm-type-string-fg:  #569cd6;
+  --gm-type-number-bg:  rgba(181, 206, 168, 0.15);
+  --gm-type-number-fg:  #b5cea8;
+  --gm-type-bool-bg:    rgba(197, 134, 192, 0.15);
+  --gm-type-bool-fg:    #c586c0;
+  --gm-type-date-bg:    rgba(78, 201, 176, 0.15);
+  --gm-type-date-fg:    #4ec9b0;
+}
+
+/* ── Reset & base ─────────────────────────────────────────────────────────── */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: var(--gm-bg);
+  color: var(--gm-fg);
+  font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
+  font-size: var(--vscode-font-size, 13px);
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Scrollbar styling — thin and unobtrusive like Modern CSV ─────────────── */
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--gm-border);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--gm-fg-muted);
+}
+
+/* ── Focus ring ───────────────────────────────────────────────────────────── */
+
+:focus-visible {
+  outline: 1px solid var(--gm-accent);
+  outline-offset: 1px;
+}
+
+/* ── Select elements ──────────────────────────────────────────────────────── */
+
+select {
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+/* ── Glide Data Grid overrides ────────────────────────────────────────────── */
+
+/* Row number column */
+.gdg-row-marker {
+  color: var(--gm-fg-subtle) !important;
+  font-size: 11px !important;
+}
+
+/* Selection highlight */
+.gdg-selection-ring {
+  border-color: var(--gm-accent) !important;
+}

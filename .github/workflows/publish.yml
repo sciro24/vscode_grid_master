@@ -1,0 +1,36 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install root deps
+        run: npm ci
+
+      - name: Install webview deps
+        run: cd webview-ui && npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Publish to VS Marketplace
+        run: npm run publish:vscode
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+
+      - name: Publish to Open VSX
+        run: npm run publish:ovsx
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}

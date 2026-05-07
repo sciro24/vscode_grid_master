@@ -1,0 +1,135 @@
+import Papa from 'papaparse';
+import type { HostMessage } from '@shared/messages.js';
+import type { CellValue, ColumnSchema, InferredType } from '@shared/schema.js';
+import { CHUNK_SIZE, TYPE_INFERENCE_SAMPLE_ROWS } from '@shared/constants.js';
+import { gridStore } from '../stores/grid.svelte.js';
+import { uiStore } from '../stores/ui.svelte.js';
+
+type RawCsvMessage    = { type: '__RAW_CSV__';    payload: { text: string; totalBytes: number } };
+type RawBinaryMessage = { type: '__RAW_BINARY__'; payload: { base64: string; fileType: 'parquet' | 'arrow' } };
+type ExportPathMessage = { type: '__EXPORT_PATH__'; payload: { fsPath: string } };
+type AnyMessage = HostMessage | RawCsvMessage | RawBinaryMessage | ExportPathMessage;
+
+export function setupMessageHandler(): () => void {
+  const handler = (event: MessageEvent) => {
+    const msg = event.data as AnyMessage;
+    if (!msg || typeof msg.type !== 'string') return;
+
+    switch (msg.type) {
+      case 'INIT':
+        gridStore.init(msg.payload);
+        break;
+
+      case 'CHUNK':
+        gridStore.receiveChunk(msg.payload);
+        break;
+
+      case 'SCHEMA_UPDATE':
+        gridStore.updateSchema(msg.payload.schema);
+        break;
+
+      case 'LOADING':
+        uiStore.setLoading(msg.payload.active, msg.payload.message, msg.payload.progress);
+        break;
+
+      case 'ERROR':
+        uiStore.setError(msg.payload.message);
+        break;
+
+      case 'SAVE_ACK':
+        uiStore.setSaved(msg.payload.success);
+        break;
+
+      case 'EDIT_ACK':
+        gridStore.handleEditAck(msg.payload);
+        break;
+
+      case 'COLUMN_STATS':
+        gridStore.receiveColumnStats(msg.payload);
+        break;
+
+      case '__RAW_CSV__':
+        parseCsvInline(msg.payload.text, msg.payload.totalBytes);
+        break;
+
+      case '__RAW_BINARY__': {
+        const binary = atob(msg.payload.base64);
+        const buf = new ArrayBuffer(binary.length);
+        const view = new Uint8Array(buf);
+        for (let i = 0; i < binary.length; i++) view[i] = binary.charCodeAt(i);
+        gridStore.loadRawBinary(buf, msg.payload.fileType);
+        break;
+      }
+
+      case '__EXPORT_PATH__':
+        gridStore.handleExportPath(msg.payload.fsPath);
+        break;
+    }
+  };
+
+  window.addEventListener('message', handler);
+  return () => window.removeEventListener('message', handler);
+}
+
+// ── Inline CSV parsing (synchronous, main thread, no Worker) ──────────────────
+
+function parseCsvInline(text: string, _totalBytes: number): void {
+  try {
+    const result = Papa.parse<string[]>(text, {
+      delimiter: '',
+      skipEmptyLines: true,
+      header: false,
+    });
+
+    if (result.errors.length > 0 && result.data.length === 0) {
+      uiStore.setError(result.errors[0].message);
+      return;
+    }
+
+    const raw = result.data as string[][];
+    if (raw.length === 0) {
+      uiStore.setError('File is empty');
+      return;
+    }
+
+    const headers = raw[0];
+    const allRows: CellValue[][] = raw.slice(1).map(row => row.map(coerceCell));
+    const schema = inferSchema(headers, allRows.slice(0, TYPE_INFERENCE_SAMPLE_ROWS));
+
+    gridStore.receiveCsvData(schema, allRows);
+    uiStore.setLoading(false);
+  } catch (err) {
+    uiStore.setError(String(err));
+  }
+}
+
+function coerceCell(raw: string): CellValue {
+  if (raw === '' || raw === 'null' || raw === 'NULL' || raw === 'NA' || raw === 'N/A') return null;
+  const n = Number(raw);
+  if (!isNaN(n) && raw.trim() !== '') return n;
+  const lower = raw.toLowerCase();
+  if (lower === 'true') return true;
+  if (lower === 'false') return false;
+  return raw;
+}
+
+function inferType(samples: CellValue[]): InferredType {
+  const nonNull = samples.filter(v => v !== null);
+  if (nonNull.length === 0) return 'null';
+  if (nonNull.every(v => typeof v === 'number')) return 'number';
+  if (nonNull.every(v => typeof v === 'boolean')) return 'boolean';
+  if (nonNull.every(v => typeof v === 'string' && isDateLike(v as string))) return 'date';
+  return 'string';
+}
+
+function isDateLike(s: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}/.test(s) || /^\d{2}[\/\-]\d{2}[\/\-]\d{4}/.test(s);
+}
+
+function inferSchema(headers: string[], sampleRows: CellValue[][]): ColumnSchema[] {
+  return headers.map((name, index) => {
+    const samples = sampleRows.map(row => row[index] ?? null);
+    const nullCount = samples.filter(v => v === null).length;
+    return { name, index, inferredType: inferType(samples), nullable: nullCount > 0 };
+  });
+}
