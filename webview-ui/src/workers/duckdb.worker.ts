@@ -56,7 +56,7 @@ self.onmessage = async (e: MessageEvent<DuckDbWorkerIn>) => {
 async function handleLoad(buffer: ArrayBuffer, fileType: 'parquet' | 'arrow' | 'json', bundles: DuckDbBundleSet, jsonFormat: 'json' | 'ndjson' = 'json'): Promise<void> {
   console.log('[GM worker] handleLoad', fileType, buffer.byteLength, 'bytes');
 
-  let table: arrow.Table;
+  let table: arrow.Table | null = null;
 
   if (fileType === 'parquet') {
     if (!_parquetInited) {
@@ -84,12 +84,23 @@ async function handleLoad(buffer: ArrayBuffer, fileType: 'parquet' | 'arrow' | '
   } else if (fileType === 'arrow') {
     table = arrow.tableFromIPC(new Uint8Array(buffer));
   } else {
-    // JSON / NDJSON — parse inline
+    // JSON / NDJSON — parse directly; skip arrow.tableFromJSON which uses
+    // `new Function` internally and is blocked by the webview CSP.
     const text = new TextDecoder().decode(buffer);
     const rawRows: Record<string, unknown>[] = jsonFormat === 'ndjson'
       ? text.trim().split('\n').filter(Boolean).map(l => JSON.parse(l))
       : JSON.parse(text);
-    table = arrow.tableFromJSON(rawRows);
+
+    const colNames = rawRows.length > 0 ? Object.keys(rawRows[0]) : [];
+    _schema = colNames.map((name, index) => ({
+      name,
+      index,
+      inferredType: inferJsonColumnType(rawRows, name),
+      nullable: true,
+    }));
+    _allRows = rawRows.map(row => colNames.map(name => coerceJsonValue(row[name])));
+    post({ type: 'READY', payload: { schema: _schema, totalRows: _allRows.length } });
+    return;
   }
 
   console.log('[GM worker] table loaded, rows:', table.numRows, 'cols:', table.numCols);
@@ -122,6 +133,30 @@ function coerceArrowValue(v: unknown): CellValue {
   if (v instanceof Date) return v.toISOString();
   if (typeof v === 'object') return JSON.stringify(v);
   return v as CellValue;
+}
+
+function coerceJsonValue(v: unknown): CellValue {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'number') return v;
+  if (typeof v === 'string') return v;
+  if (v instanceof Date) return v.toISOString();
+  return JSON.stringify(v);
+}
+
+function inferJsonColumnType(rows: Record<string, unknown>[], name: string): InferredType {
+  for (const row of rows) {
+    const v = row[name];
+    if (v === null || v === undefined) continue;
+    if (typeof v === 'boolean') return 'boolean';
+    if (typeof v === 'number') return 'number';
+    if (typeof v === 'string') {
+      if (!isNaN(Date.parse(v)) && /\d{4}-\d{2}-\d{2}/.test(v)) return 'date';
+      return 'string';
+    }
+    return 'string';
+  }
+  return 'string';
 }
 
 function arrowTypeToInferred(type: arrow.DataType): InferredType {

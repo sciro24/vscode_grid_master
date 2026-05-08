@@ -48,8 +48,8 @@ table = pa.Table.from_pandas(df)
 pq.write_table(table, OUT / "flights.parquet")
 print(f"wrote {OUT / 'flights.parquet'}")
 
-# Arrow / Feather
-feather.write_feather(table, OUT / "flights.arrow")
+# Arrow / Feather — no compression so apache-arrow JS can read it without codecs
+feather.write_feather(table, OUT / "flights.arrow", compression="uncompressed")
 print(f"wrote {OUT / 'flights.arrow'}")
 
 # JSON (array of objects)
