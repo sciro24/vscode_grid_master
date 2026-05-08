@@ -74,13 +74,13 @@ async function handleLoad(buffer: ArrayBuffer, fileType: 'parquet' | 'arrow' | '
         const bin = atob(b64);
         const bytes = new Uint8Array(bin.length);
         for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-        await init(bytes);
+        await init({ module_or_path: bytes });
       }
       _parquetInited = true;
       console.log('[GM worker] parquet-wasm initialised');
     }
-    const arrowIpc = readParquet(new Uint8Array(buffer));
-    table = arrow.tableFromIPC(arrowIpc);
+    const wasmTable = readParquet(new Uint8Array(buffer));
+    table = arrow.tableFromIPC(wasmTable.intoIPCStream());
   } else if (fileType === 'arrow') {
     table = arrow.tableFromIPC(new Uint8Array(buffer));
   } else {
