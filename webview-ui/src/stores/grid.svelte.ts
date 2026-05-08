@@ -24,8 +24,15 @@ class GridStore {
   private _cache: ChunkCache = new Map();
   private _accessOrder: number[] = [];
 
+  // Reactive counter — bumped on any cache mutation so derived UI re-renders.
+  // Plain Maps aren't reactive in Svelte 5, this is the cheapest fix.
+  cacheVersion = $state(0);
+
   // CSV-only: full dataset held in memory for inline filter/sort
   private _csvAllRows: CellValue[][] = [];
+
+  // Auto-fitted column widths, keyed by column name. Computed once after data load.
+  private _autoWidths = new Map<string, number>();
 
   // Viewport
   visibleStartRow = $state(0);
@@ -94,7 +101,35 @@ class GridStore {
     this.totalRows = allRows.length;
     this.filteredRows = allRows.length;
     this._csvAllRows = allRows;
+    this._computeAutoWidths(schema, allRows);
     this._storeChunk(0, allRows.slice(0, CHUNK_SIZE));
+  }
+
+  // Sample first N rows + header to estimate optimal column widths.
+  // Uses character-count heuristic (fast, no DOM measurement needed).
+  private _computeAutoWidths(schema: ColumnSchema[], rows: CellValue[][]): void {
+    const SAMPLE = Math.min(rows.length, 200);
+    const CHAR_PX = 7.2;          // approx char width at 12px monospace
+    const PADDING = 24;           // 8px each side + a little slack
+    const TYPE_LABEL_PAD = 14;    // header has type sub-label
+    const MIN_W = 60;
+    const MAX_W = 400;
+
+    for (const col of schema) {
+      let maxLen = col.name.length + 2;
+      for (let i = 0; i < SAMPLE; i++) {
+        const v = rows[i]?.[col.index];
+        if (v === null || v === undefined) continue;
+        const s = typeof v === 'number' ? v.toLocaleString() : String(v);
+        if (s.length > maxLen) maxLen = s.length;
+      }
+      const w = Math.max(MIN_W, Math.min(MAX_W, Math.ceil(maxLen * CHAR_PX) + PADDING + TYPE_LABEL_PAD));
+      this._autoWidths.set(col.name, w);
+    }
+  }
+
+  getAutoWidth(colName: string): number | undefined {
+    return this._autoWidths.get(colName);
   }
 
   loadRawBinary(buffer: ArrayBuffer, fileType: 'parquet' | 'arrow'): void {
@@ -175,6 +210,7 @@ class GridStore {
 
   setGlobalSearch(query: string): void {
     this.globalSearch = query;
+    this._invalidateCache();
   }
 
   // ── Column ops ────────────────────────────────────────────────────────────
@@ -251,6 +287,11 @@ class GridStore {
       rows = rows.filter(row => this.filters.every(f => applyFilter(row, f)));
     }
 
+    const q = this.globalSearch.trim().toLowerCase();
+    if (q.length > 0) {
+      rows = rows.filter(row => row.some(cell => String(cell ?? '').toLowerCase().includes(q)));
+    }
+
     if (this.sort) {
       const { colIndex, direction } = this.sort;
       rows = [...rows].sort((a, b) => compareValues(a[colIndex], b[colIndex], direction));
@@ -269,11 +310,13 @@ class GridStore {
       const evict = this._accessOrder.shift()!;
       this._cache.delete(evict);
     }
+    this.cacheVersion++;
   }
 
   private _invalidateCache(): void {
     this._cache.clear();
     this._accessOrder = [];
+    this.cacheVersion++;
     this._requestChunk(this.visibleStartRow, this.visibleEndRow + CHUNK_SIZE);
   }
 

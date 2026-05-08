@@ -29,6 +29,17 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('gridMaster.setAsDefaultEditor', async () => {
       await setAsDefault();
     }),
+
+    vscode.commands.registerCommand('gridMaster.openWith', async (uri?: vscode.Uri) => {
+      const target = uri ?? vscode.window.activeTextEditor?.document.uri;
+      if (!target) return;
+      const ext = target.path.split('.').pop()?.toLowerCase() ?? '';
+      const viewType =
+        ext === 'parquet' || ext === 'parq' ? VIEW_TYPES.PARQUET :
+        ext === 'arrow'   || ext === 'feather' ? VIEW_TYPES.ARROW :
+        VIEW_TYPES.CSV;
+      await vscode.commands.executeCommand('vscode.openWith', target, viewType);
+    }),
   );
 
   // Show one-time prompt to set Grid Master as the default editor.

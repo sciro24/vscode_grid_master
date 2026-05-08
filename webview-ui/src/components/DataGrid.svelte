@@ -13,6 +13,9 @@
 
   const totalRows = $derived(gridStore.filteredRows);
   const totalHeight = $derived(totalRows * ROW_HEIGHT);
+  // Read cacheVersion so cell reads in the template re-evaluate when the cache mutates.
+  // Without this Svelte can't track invalidations through the plain Map in gridStore._cache.
+  const cacheTick = $derived(gridStore.cacheVersion);
 
   const startRow = $derived(Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN));
   const visibleRowCount = $derived(Math.ceil(viewportHeight / ROW_HEIGHT) + OVERSCAN * 2);
@@ -94,6 +97,8 @@
   function colWidth(name: string, type: string): number {
     const stored = gridStore.colWidths.get(name);
     if (stored) return stored;
+    const auto = gridStore.getAutoWidth(name);
+    if (auto) return auto;
     switch (type) {
       case 'number':  return 110;
       case 'boolean': return 80;
@@ -145,7 +150,7 @@
           <div class="grid-row" style="height: {ROW_HEIGHT}px;">
             <div class="row-num-cell">{row + 1}</div>
             {#each gridStore.visibleSchema as col (col.index)}
-              {@const val = gridStore.getCell(row, col.index)}
+              {@const val = (cacheTick, gridStore.getCell(row, col.index))}
               {#if editingCell && editingCell.row === row && editingCell.col === col.index}
                 <input
                   class="cell-input"

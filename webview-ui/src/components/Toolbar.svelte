@@ -66,9 +66,29 @@
       </button>
     {/if}
 
-    <button class="btn btn-ghost" onclick={() => showColumnPanel = !showColumnPanel} title="Manage columns">
-      <svg viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M0 2h4v12H0V2zm6 0h4v12H6V2zm6 0h4v12h-4V2z"/></svg>
-    </button>
+    <div class="col-panel-wrap">
+      <button class="btn btn-ghost" onclick={() => showColumnPanel = !showColumnPanel} title="Show / hide columns">
+        <svg viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M0 2h4v12H0V2zm6 0h4v12H6V2zm6 0h4v12h-4V2z"/></svg>
+      </button>
+      {#if showColumnPanel}
+        <div class="col-panel" role="dialog">
+          <div class="col-panel-header">Columns</div>
+          <div class="col-panel-body">
+            {#each gridStore.schema as col (col.index)}
+              <label class="col-row">
+                <input
+                  type="checkbox"
+                  checked={!gridStore.hiddenCols.has(col.index)}
+                  onchange={() => gridStore.toggleColumnVisibility(col.index)}
+                />
+                <span class="col-name">{col.name}</span>
+                <span class="col-type">{col.inferredType}</span>
+              </label>
+            {/each}
+          </div>
+        </div>
+      {/if}
+    </div>
 
     <button class="btn btn-ghost" onclick={handleExport} title="Export">
       <svg viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M8 12l-4-4h2.5V2h3v6H12L8 12zM1 14h14v1.5H1V14z"/></svg>
@@ -210,5 +230,65 @@
 
   .btn-primary:hover {
     background: var(--gm-accent-hover);
+  }
+
+  .col-panel-wrap {
+    position: relative;
+  }
+
+  .col-panel {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    min-width: 220px;
+    max-height: 360px;
+    background: var(--gm-toolbar-bg, var(--vscode-editorWidget-background));
+    border: 1px solid var(--gm-border, var(--vscode-panel-border));
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .col-panel-header {
+    padding: 6px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--gm-fg-muted);
+    border-bottom: 1px solid var(--gm-border, var(--vscode-panel-border));
+  }
+
+  .col-panel-body {
+    overflow-y: auto;
+    padding: 4px 0;
+  }
+
+  .col-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .col-row:hover {
+    background: var(--gm-hover-bg, var(--vscode-list-hoverBackground));
+  }
+
+  .col-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .col-type {
+    font-size: 10px;
+    opacity: 0.6;
+    text-transform: uppercase;
   }
 </style>

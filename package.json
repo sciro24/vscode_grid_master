@@ -63,8 +63,29 @@
       {
         "command": "gridMaster.setAsDefaultEditor",
         "title": "Grid Master: Set as Default Editor for CSV/TSV/Parquet/Arrow"
+      },
+      {
+        "command": "gridMaster.openWith",
+        "title": "Open with Grid Master",
+        "category": "Grid Master"
       }
     ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "gridMaster.openWith",
+          "when": "resourceExtname =~ /\\.(csv|tsv|parquet|parq|arrow|feather)$/i",
+          "group": "navigation@10"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "gridMaster.openWith",
+          "when": "resourceExtname =~ /\\.(csv|tsv|parquet|parq|arrow|feather)$/i",
+          "group": "navigation@10"
+        }
+      ]
+    },
     "configuration": {
       "title": "Grid Master",
       "properties": {
