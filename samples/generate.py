@@ -63,6 +63,10 @@ with open(OUT / "flights.jsonl", "w") as f:
         f.write(json.dumps(r) + "\n")
 print(f"wrote {OUT / 'flights.jsonl'}")
 
+# TSV (tab-separated values)
+df.to_csv(OUT / "flights.tsv", index=False, sep='\t')
+print(f"wrote {OUT / 'flights.tsv'} ({len(df)} rows)")
+
 # A small file mirroring the user's reproducer for the "2.024 year bug"
 small = pd.DataFrame([{
     "fl_date": "2024-06-08",

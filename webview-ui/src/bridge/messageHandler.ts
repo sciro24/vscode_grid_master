@@ -12,7 +12,7 @@ type DuckBundles = {
   parquetWasmB64?: string;
 };
 
-type RawBinaryMessage = { type: '__RAW_BINARY__'; payload: { base64: string; fileType: 'parquet' | 'arrow' | 'json'; jsonFormat?: 'json' | 'ndjson'; duckBundles: DuckBundles } };
+type RawBinaryMessage = { type: '__RAW_BINARY__'; payload: { base64?: string; base64Parts?: string[]; fileType: 'parquet' | 'arrow' | 'json'; jsonFormat?: 'json' | 'ndjson'; duckBundles: DuckBundles } };
 type ExportPathMessage = { type: '__EXPORT_PATH__'; payload: { fsPath: string } };
 type AnyMessage = HostMessage | RawCsvMessage | RawBinaryMessage | ExportPathMessage;
 
@@ -59,12 +59,25 @@ export function setupMessageHandler(): () => void {
         break;
 
       case '__RAW_BINARY__': {
-        console.log('[GM] __RAW_BINARY__', msg.payload.fileType, 'base64 len', msg.payload.base64?.length, 'bundles', JSON.stringify(msg.payload.duckBundles));
-        const binary = atob(msg.payload.base64);
-        const buf = new ArrayBuffer(binary.length);
-        const view = new Uint8Array(buf);
-        for (let i = 0; i < binary.length; i++) view[i] = binary.charCodeAt(i);
-        gridStore.loadRawBinary(buf, msg.payload.fileType, msg.payload.duckBundles, msg.payload.jsonFormat);
+        const { fileType, duckBundles, jsonFormat, base64, base64Parts } = msg.payload;
+        if (base64Parts && base64Parts.length > 0) {
+          console.log('[GM] __RAW_BINARY__', fileType, 'parts=', base64Parts.length);
+          const buffers = base64Parts.map(b64 => {
+            const binary = atob(b64);
+            const buf = new ArrayBuffer(binary.length);
+            const view = new Uint8Array(buf);
+            for (let i = 0; i < binary.length; i++) view[i] = binary.charCodeAt(i);
+            return buf;
+          });
+          gridStore.loadRawBinaryParts(buffers, fileType, duckBundles);
+        } else if (base64) {
+          console.log('[GM] __RAW_BINARY__', fileType, 'base64 len', base64.length);
+          const binary = atob(base64);
+          const buf = new ArrayBuffer(binary.length);
+          const view = new Uint8Array(buf);
+          for (let i = 0; i < binary.length; i++) view[i] = binary.charCodeAt(i);
+          gridStore.loadRawBinary(buf, fileType, duckBundles, jsonFormat);
+        }
         break;
       }
 

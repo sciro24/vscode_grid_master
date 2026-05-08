@@ -162,6 +162,20 @@ class GridStore {
     }).catch(e => uiStore.setError(String(e)));
   }
 
+  loadRawBinaryParts(
+    buffers: ArrayBuffer[],
+    fileType: 'parquet' | 'arrow',
+    duckBundles: import('../workers/duckdb.worker.js').DuckDbBundleSet,
+  ): void {
+    this.fileType = fileType;
+    console.log('[GM] loadRawBinaryParts', fileType, buffers.length, 'parts');
+    this._getOrCreateWorker().then(worker => {
+      console.log('[GM] sending LOAD_PARTS to worker');
+      const msg: DuckDbWorkerIn = { type: 'LOAD_PARTS', payload: { buffers, fileType, bundles: duckBundles } };
+      worker.postMessage(msg, buffers);
+    }).catch(e => uiStore.setError(String(e)));
+  }
+
   // ── Data Access ───────────────────────────────────────────────────────────
 
   getCell(row: number, col: number): CellValue {

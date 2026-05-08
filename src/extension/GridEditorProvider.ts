@@ -262,7 +262,44 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
         });
         return;
       } else {
-        const bytes = await GridEditorProvider._fileReader.readAll(document.uri);
+        // Check if URI is a partitioned parquet directory (e.g. Spark output).
+        // A directory named *.parquet contains part-*.parquet files inside it.
+        const isPartitionedDir = await (async () => {
+          try {
+            const stat = await vscode.workspace.fs.stat(document.uri);
+            return stat.type === vscode.FileType.Directory;
+          } catch {
+            return false;
+          }
+        })();
+
+        let partFiles: Uint8Array[] = [];
+
+        if (isPartitionedDir) {
+          send({ type: 'LOADING', payload: { active: true, message: 'Reading partitioned dataset...' } });
+          const entries = await vscode.workspace.fs.readDirectory(document.uri);
+          const partNames = entries
+            .filter(([name, type]) =>
+              type === vscode.FileType.File &&
+              /^part-.*\.parquet$/i.test(name),
+            )
+            .map(([name]) => name)
+            .sort();
+
+          if (partNames.length === 0) {
+            send({ type: 'ERROR', payload: { code: 'READ_ERROR', message: 'No part-*.parquet files found in directory.' } });
+            return;
+          }
+
+          for (const name of partNames) {
+            const partUri = vscode.Uri.joinPath(document.uri, name);
+            const bytes = await GridEditorProvider._fileReader.readAll(partUri);
+            partFiles.push(bytes);
+          }
+        } else {
+          const bytes = await GridEditorProvider._fileReader.readAll(document.uri);
+          partFiles = [bytes];
+        }
 
         send({
           type: 'INIT',
@@ -278,11 +315,19 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
           },
         });
 
-        const base64 = Buffer.from(bytes).toString('base64');
-        panel.webview.postMessage({
-          type: '__RAW_BINARY__',
-          payload: { base64, fileType: document.fileType, duckBundles },
-        });
+        if (partFiles.length === 1) {
+          const base64 = Buffer.from(partFiles[0]).toString('base64');
+          panel.webview.postMessage({
+            type: '__RAW_BINARY__',
+            payload: { base64, fileType: document.fileType, duckBundles },
+          });
+        } else {
+          const parts = partFiles.map(b => Buffer.from(b).toString('base64'));
+          panel.webview.postMessage({
+            type: '__RAW_BINARY__',
+            payload: { base64Parts: parts, fileType: document.fileType, duckBundles },
+          });
+        }
       }
 
       send({ type: 'LOADING', payload: { active: false } });

@@ -18,6 +18,7 @@ export type DuckDbBundleSet = {
 
 export type DuckDbWorkerIn =
   | { type: 'LOAD'; payload: { buffer: ArrayBuffer; fileType: 'parquet' | 'arrow' | 'json'; jsonFormat?: 'json' | 'ndjson'; bundles: DuckDbBundleSet } }
+  | { type: 'LOAD_PARTS'; payload: { buffers: ArrayBuffer[]; fileType: 'parquet' | 'arrow'; bundles: DuckDbBundleSet } }
   | { type: 'GET_CHUNK'; payload: { requestId: string; startRow: number; endRow: number; filters?: FilterSpec[]; sort?: SortSpec; globalSearch?: string } }
   | { type: 'QUERY'; payload: { requestId: string; sql: string } };
 
@@ -41,9 +42,10 @@ self.onmessage = async (e: MessageEvent<DuckDbWorkerIn>) => {
   console.log('[GM worker] received message', msg.type);
   try {
     switch (msg.type) {
-      case 'LOAD':      await handleLoad(msg.payload.buffer, msg.payload.fileType, msg.payload.bundles, msg.payload.jsonFormat); break;
-      case 'GET_CHUNK': handleGetChunk(msg.payload); break;
-      case 'QUERY':     break; // not implemented in this backend
+      case 'LOAD':       await handleLoad(msg.payload.buffer, msg.payload.fileType, msg.payload.bundles, msg.payload.jsonFormat); break;
+      case 'LOAD_PARTS': await handleLoadParts(msg.payload.buffers, msg.payload.fileType, msg.payload.bundles); break;
+      case 'GET_CHUNK':  handleGetChunk(msg.payload); break;
+      case 'QUERY':      break; // not implemented in this backend
     }
   } catch (err) {
     console.error('[GM worker] error in', msg.type, err);
@@ -133,6 +135,65 @@ async function handleLoad(buffer: ArrayBuffer, fileType: 'parquet' | 'arrow' | '
       return coerceArrowValue(v);
     });
     _allRows.push(row);
+  }
+
+  post({ type: 'READY', payload: { schema: _schema, totalRows: _allRows.length } });
+}
+
+async function handleLoadParts(buffers: ArrayBuffer[], fileType: 'parquet' | 'arrow', bundles: DuckDbBundleSet): Promise<void> {
+  console.log('[GM worker] handleLoadParts', fileType, buffers.length, 'parts');
+
+  // Ensure parquet-wasm is initialised once before processing any part
+  if (fileType === 'parquet' && !_parquetInited) {
+    console.log('[GM worker] initialising parquet-wasm');
+    try {
+      await init();
+    } catch (e) {
+      console.warn('[GM worker] init() failed, falling back to b64:', e);
+      const b64 = bundles.parquetWasmB64;
+      if (!b64) throw new Error('parquet-wasm bytes not provided');
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      await init({ module_or_path: bytes });
+    }
+    _parquetInited = true;
+    console.log('[GM worker] parquet-wasm initialised');
+  }
+
+  _schema = [];
+  _allRows = [];
+
+  for (let i = 0; i < buffers.length; i++) {
+    const buf = buffers[i];
+    let table: arrow.Table;
+    if (fileType === 'parquet') {
+      const wasmTable = readParquet(new Uint8Array(buf));
+      table = arrow.tableFromIPC(wasmTable.intoIPCStream());
+    } else {
+      table = arrow.tableFromIPC(new Uint8Array(buf));
+    }
+
+    // Use the schema from the first part; subsequent parts must match
+    if (i === 0) {
+      _schema = table.schema.fields.map((f, index) => ({
+        name: f.name,
+        index,
+        inferredType: arrowTypeToInferred(f.type),
+        nullable: f.nullable,
+      }));
+    }
+
+    const colNames = _schema.map(c => c.name);
+    for (let r = 0; r < table.numRows; r++) {
+      const row: CellValue[] = colNames.map(name => {
+        const v = table.getChild(name)?.get(r);
+        return coerceArrowValue(v);
+      });
+      _allRows.push(row);
+    }
+
+    console.log('[GM worker] part', i + 1, '/', buffers.length, 'loaded,', table.numRows, 'rows, total so far:', _allRows.length);
   }
 
   post({ type: 'READY', payload: { schema: _schema, totalRows: _allRows.length } });

@@ -2,7 +2,9 @@
   "compilerOptions": {
     "module": "Node16",
     "target": "ES2022",
-    "lib": ["ES2022"],
+    "lib": [
+      "ES2022"
+    ],
     "outDir": "out",
     "rootDir": "src",
     "strict": true,
@@ -13,9 +15,19 @@
     "declarationMap": true,
     "sourceMap": true,
     "paths": {
-      "@shared/*": ["./src/shared/*"]
+      "@shared/*": [
+        "./src/shared/*"
+      ]
     }
   },
-  "include": ["src/extension/**/*", "src/shared/**/*"],
-  "exclude": ["node_modules", "dist", "out", "webview-ui"]
+  "include": [
+    "src/extension/**/*",
+    "src/shared/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "out",
+    "webview-ui"
+  ]
 }
