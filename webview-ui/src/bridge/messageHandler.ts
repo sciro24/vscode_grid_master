@@ -12,9 +12,10 @@ type DuckBundles = {
   parquetWasmB64?: string;
 };
 
-type RawBinaryMessage = { type: '__RAW_BINARY__'; payload: { base64?: string; base64Parts?: string[]; fileType: 'parquet' | 'arrow' | 'json'; jsonFormat?: 'json' | 'ndjson'; duckBundles: DuckBundles } };
+type RawBinaryMessage = { type: '__RAW_BINARY__'; payload: { base64?: string; base64Parts?: string[]; fileType: 'parquet' | 'arrow' | 'json' | 'excel' | 'avro'; jsonFormat?: 'json' | 'ndjson'; duckBundles: DuckBundles } };
+type RawRowsMessage   = { type: '__RAW_ROWS__';   payload: { schema: ColumnSchema[]; rows: CellValue[][]; duckBundles: DuckBundles } };
 type ExportPathMessage = { type: '__EXPORT_PATH__'; payload: { fsPath: string } };
-type AnyMessage = HostMessage | RawCsvMessage | RawBinaryMessage | ExportPathMessage;
+type AnyMessage = HostMessage | RawCsvMessage | RawBinaryMessage | RawRowsMessage | ExportPathMessage;
 
 export function setupMessageHandler(): () => void {
   const handler = (event: MessageEvent) => {
@@ -80,6 +81,10 @@ export function setupMessageHandler(): () => void {
         }
         break;
       }
+
+      case '__RAW_ROWS__':
+        gridStore.receiveRawRows(msg.payload.schema, msg.payload.rows);
+        break;
 
       case '__EXPORT_PATH__':
         gridStore.handleExportPath(msg.payload.fsPath);

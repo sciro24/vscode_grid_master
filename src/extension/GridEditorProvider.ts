@@ -4,6 +4,7 @@ import { DocumentModel } from './DocumentModel.js';
 import { FileReaderService } from './FileReaderService.js';
 import { detectFileType } from './utils/fileTypeDetector.js';
 import type { HostMessage, WebviewMessage } from '../shared/messages.js';
+import type { CellValue, ColumnSchema, InferredType } from '../shared/schema.js';
 
 export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentModel> {
   private static readonly _fileReader = new FileReaderService();
@@ -34,11 +35,14 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
     _token: vscode.CancellationToken,
   ): Promise<DocumentModel> {
     const detectedType = detectFileType(uri);
-    // Normalise to the four types DocumentModel understands
-    const fileType: 'csv' | 'parquet' | 'arrow' | 'json' =
-      detectedType === 'parquet' || detectedType === 'parq' ? 'parquet' :
+    const fileType: DocumentModel['fileType'] =
+      detectedType === 'parquet' || detectedType === 'parq'   ? 'parquet' :
       detectedType === 'arrow'   || detectedType === 'feather' ? 'arrow' :
       detectedType === 'json'    || detectedType === 'jsonl' || detectedType === 'ndjson' ? 'json' :
+      detectedType === 'xlsx'    || detectedType === 'xlsb' || detectedType === 'xls' || detectedType === 'xlsm' ? 'excel' :
+      detectedType === 'avro'    ? 'avro' :
+      detectedType === 'db'      || detectedType === 'sqlite' || detectedType === 'sqlite3' ? 'sqlite' :
+      detectedType === 'orc'     ? 'orc' :
       'csv';
 
     const doc = new DocumentModel(uri, fileType);
@@ -217,6 +221,24 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
         parquetWasmB64,
       };
 
+      if (document.fileType === 'orc') {
+        await this._sendOrcData(document, panel, fileName, totalBytes, parquetWasmB64, duckWorkerUrl);
+        send({ type: 'LOADING', payload: { active: false } });
+        return;
+      }
+
+      if (document.fileType === 'sqlite') {
+        await this._sendSqliteData(document, panel, fileName, totalBytes, parquetWasmB64, duckWorkerUrl);
+        send({ type: 'LOADING', payload: { active: false } });
+        return;
+      }
+
+      if (document.fileType === 'avro') {
+        await this._sendAvroData(document, panel, fileName, totalBytes, parquetWasmB64, duckWorkerUrl);
+        send({ type: 'LOADING', payload: { active: false } });
+        return;
+      }
+
       if (document.fileType === 'csv') {
         const raw = await GridEditorProvider._fileReader.readAll(document.uri);
         const text = new TextDecoder('utf-8').decode(raw);
@@ -262,71 +284,95 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
         });
         return;
       } else {
-        // Check if URI is a partitioned parquet directory (e.g. Spark output).
-        // A directory named *.parquet contains part-*.parquet files inside it.
-        const isPartitionedDir = await (async () => {
-          try {
-            const stat = await vscode.workspace.fs.stat(document.uri);
-            return stat.type === vscode.FileType.Directory;
-          } catch {
-            return false;
-          }
-        })();
+        // excel is a single-buffer binary format handled in the webview worker
+        const isSingleBinary = document.fileType === 'excel';
 
-        let partFiles: Uint8Array[] = [];
-
-        if (isPartitionedDir) {
-          send({ type: 'LOADING', payload: { active: true, message: 'Reading partitioned dataset...' } });
-          const entries = await vscode.workspace.fs.readDirectory(document.uri);
-          const partNames = entries
-            .filter(([name, type]) =>
-              type === vscode.FileType.File &&
-              /^part-.*\.parquet$/i.test(name),
-            )
-            .map(([name]) => name)
-            .sort();
-
-          if (partNames.length === 0) {
-            send({ type: 'ERROR', payload: { code: 'READ_ERROR', message: 'No part-*.parquet files found in directory.' } });
-            return;
-          }
-
-          for (const name of partNames) {
-            const partUri = vscode.Uri.joinPath(document.uri, name);
-            const bytes = await GridEditorProvider._fileReader.readAll(partUri);
-            partFiles.push(bytes);
-          }
-        } else {
+        if (isSingleBinary) {
           const bytes = await GridEditorProvider._fileReader.readAll(document.uri);
-          partFiles = [bytes];
-        }
-
-        send({
-          type: 'INIT',
-          payload: {
-            fileType: document.fileType,
-            fileName,
-            totalRows: -1,
-            totalBytes,
-            schema: [],
-            firstChunk: { rows: [], startRow: 0, endRow: 0 },
-            sidecar: document.sidecar,
-            duckWorkerUrl,
-          },
-        });
-
-        if (partFiles.length === 1) {
-          const base64 = Buffer.from(partFiles[0]).toString('base64');
+          send({
+            type: 'INIT',
+            payload: {
+              fileType: document.fileType,
+              fileName,
+              totalRows: -1,
+              totalBytes,
+              schema: [],
+              firstChunk: { rows: [], startRow: 0, endRow: 0 },
+              sidecar: document.sidecar,
+              duckWorkerUrl,
+            },
+          });
+          const base64 = Buffer.from(bytes).toString('base64');
           panel.webview.postMessage({
             type: '__RAW_BINARY__',
             payload: { base64, fileType: document.fileType, duckBundles },
           });
         } else {
-          const parts = partFiles.map(b => Buffer.from(b).toString('base64'));
-          panel.webview.postMessage({
-            type: '__RAW_BINARY__',
-            payload: { base64Parts: parts, fileType: document.fileType, duckBundles },
+          // parquet / arrow — check for partitioned directory (Spark-style)
+          const isPartitionedDir = await (async () => {
+            try {
+              const stat = await vscode.workspace.fs.stat(document.uri);
+              return stat.type === vscode.FileType.Directory;
+            } catch {
+              return false;
+            }
+          })();
+
+          let partFiles: Uint8Array[] = [];
+
+          if (isPartitionedDir) {
+            send({ type: 'LOADING', payload: { active: true, message: 'Reading partitioned dataset...' } });
+            const entries = await vscode.workspace.fs.readDirectory(document.uri);
+            const partNames = entries
+              .filter(([name, type]) =>
+                type === vscode.FileType.File &&
+                /^part-.*\.parquet$/i.test(name),
+              )
+              .map(([name]) => name)
+              .sort();
+
+            if (partNames.length === 0) {
+              send({ type: 'ERROR', payload: { code: 'READ_ERROR', message: 'No part-*.parquet files found in directory.' } });
+              return;
+            }
+
+            for (const name of partNames) {
+              const partUri = vscode.Uri.joinPath(document.uri, name);
+              const bytes = await GridEditorProvider._fileReader.readAll(partUri);
+              partFiles.push(bytes);
+            }
+          } else {
+            const bytes = await GridEditorProvider._fileReader.readAll(document.uri);
+            partFiles = [bytes];
+          }
+
+          send({
+            type: 'INIT',
+            payload: {
+              fileType: document.fileType,
+              fileName,
+              totalRows: -1,
+              totalBytes,
+              schema: [],
+              firstChunk: { rows: [], startRow: 0, endRow: 0 },
+              sidecar: document.sidecar,
+              duckWorkerUrl,
+            },
           });
+
+          if (partFiles.length === 1) {
+            const base64 = Buffer.from(partFiles[0]).toString('base64');
+            panel.webview.postMessage({
+              type: '__RAW_BINARY__',
+              payload: { base64, fileType: document.fileType, duckBundles },
+            });
+          } else {
+            const parts = partFiles.map(b => Buffer.from(b).toString('base64'));
+            panel.webview.postMessage({
+              type: '__RAW_BINARY__',
+              payload: { base64Parts: parts, fileType: document.fileType, duckBundles },
+            });
+          }
         }
       }
 
@@ -351,6 +397,310 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
     // Patches are applied and serialized by the webview CSV worker.
     // Full write-back implementation is Milestone 4.
     document.clearPatches();
+  }
+
+  // ── SQLite: read host-side, send rows as JSON ─────────────────────────────
+
+  private async _sendSqliteData(
+    document: DocumentModel,
+    panel: vscode.WebviewPanel,
+    fileName: string,
+    totalBytes: number,
+    parquetWasmB64: string,
+    duckWorkerUrl: string,
+  ): Promise<void> {
+    const send = (m: HostMessage) => panel.webview.postMessage(m);
+
+    // sql.js is a WASM-based SQLite that runs in Node — no native bindings needed.
+    // The WASM file is copied to dist/ at build time so it's available in the
+    // installed extension (node_modules is excluded from the .vsix).
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const initSqlJs = require('sql.js') as typeof import('sql.js');
+    const wasmUri = vscode.Uri.joinPath(this._context.extensionUri, 'dist', 'sql-wasm.wasm');
+    const wasmPath = wasmUri.fsPath;
+    const SQL = await initSqlJs({ locateFile: () => wasmPath });
+
+    const fileBytes = await GridEditorProvider._fileReader.readAll(document.uri);
+    const db = new SQL.Database(fileBytes);
+
+    // List all tables and views
+    const tableRes = db.exec(`SELECT name FROM sqlite_master WHERE type IN ('table','view') ORDER BY name`);
+    const tables: string[] = tableRes[0]?.values.map(r => String(r[0])) ?? [];
+
+    if (tables.length === 0) {
+      send({ type: 'ERROR', payload: { code: 'READ_ERROR', message: 'SQLite file contains no tables.' } });
+      db.close();
+      return;
+    }
+
+    // If multiple tables, show a quick-pick. For now use the first table.
+    // Future: could send each table as a separate sheet.
+    let tableName = tables[0];
+    if (tables.length > 1) {
+      const picked = await vscode.window.showQuickPick(tables, {
+        placeHolder: 'Select table to open',
+        title: `${fileName} — ${tables.length} tables found`,
+      });
+      if (!picked) { db.close(); return; }
+      tableName = picked;
+    }
+
+    const res = db.exec(`SELECT * FROM "${tableName.replace(/"/g, '""')}"`);
+    db.close();
+
+    if (!res[0]) {
+      send({ type: 'ERROR', payload: { code: 'READ_ERROR', message: `Table "${tableName}" is empty.` } });
+      return;
+    }
+
+    const colNames: string[] = res[0].columns;
+    const rawRows: unknown[][] = res[0].values;
+
+    // Infer schema from first 1000 rows
+    const schema: ColumnSchema[] = colNames.map((name, index) => {
+      let inferredType: InferredType = 'string';
+      for (let i = 0; i < Math.min(rawRows.length, 1000); i++) {
+        const v = rawRows[i][index];
+        if (v === null || v === undefined) continue;
+        if (typeof v === 'number') { inferredType = 'number'; break; }
+        if (typeof v === 'boolean') { inferredType = 'boolean'; break; }
+        if (typeof v === 'string') {
+          if (/^\d{4}-\d{2}-\d{2}/.test(v)) { inferredType = 'date'; break; }
+          inferredType = 'string'; break;
+        }
+      }
+      return { name, index, inferredType, nullable: true };
+    });
+
+    const rows: CellValue[][] = rawRows.map(r =>
+      r.map(v => {
+        if (v === null || v === undefined) return null;
+        if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'string') return v;
+        return String(v);
+      })
+    );
+
+    const duckBundles = {
+      eh: { mainWorkerB64: '', mainModuleB64: '' },
+      extensions: { parquetB64: '', jsonB64: '' },
+      parquetWasmB64,
+    };
+
+    send({
+      type: 'INIT',
+      payload: {
+        fileType: 'sqlite',
+        fileName: `${fileName} — ${tableName}`,
+        totalRows: rows.length,
+        totalBytes,
+        schema,
+        firstChunk: { rows: [], startRow: 0, endRow: 0 },
+        sidecar: document.sidecar,
+        duckWorkerUrl,
+      },
+    });
+
+    panel.webview.postMessage({
+      type: '__RAW_ROWS__',
+      payload: { schema, rows, duckBundles },
+    });
+  }
+
+  // ── ORC: decode host-side via Python + pyorc, send rows as JSON ──────────
+
+  private async _sendOrcData(
+    document: DocumentModel,
+    panel: vscode.WebviewPanel,
+    fileName: string,
+    totalBytes: number,
+    parquetWasmB64: string,
+    duckWorkerUrl: string,
+  ): Promise<void> {
+    const send = (m: HostMessage) => panel.webview.postMessage(m);
+    const { execFile } = await import('child_process');
+    const { promisify } = await import('util');
+    const execFileAsync = promisify(execFile);
+
+    const filePath = document.uri.fsPath;
+
+    // Inline Python script: reads ORC with pyorc and outputs NDJSON to stdout.
+    const pyScript = `
+import sys, json, pyorc
+reader = pyorc.Reader(open(${JSON.stringify(filePath)}, 'rb'))
+schema = reader.schema
+fields = list(schema.fields.keys())
+print(json.dumps(fields))
+for row in reader:
+    obj = dict(zip(fields, row))
+    # convert non-serializable types (e.g. Date) to strings
+    for k, v in obj.items():
+        if not isinstance(v, (int, float, bool, str, type(None))):
+            obj[k] = str(v)
+    sys.stdout.write(json.dumps(obj) + '\\n')
+`.trim();
+
+    let stdout: string;
+    try {
+      const result = await execFileAsync('python3', ['-c', pyScript], { maxBuffer: 200 * 1024 * 1024 });
+      stdout = result.stdout;
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      const hint = msg.includes('pyorc') || msg.includes('ModuleNotFound')
+        ? ' — install pyorc with: pip3 install pyorc'
+        : msg.includes('python3') || msg.includes('ENOENT')
+        ? ' — python3 is required to read ORC files'
+        : '';
+      send({ type: 'ERROR', payload: { code: 'READ_ERROR', message: `ORC read failed${hint}: ${msg}` } });
+      return;
+    }
+
+    const lines = stdout.trim().split('\n').filter(Boolean);
+    if (lines.length === 0) {
+      send({ type: 'ERROR', payload: { code: 'READ_ERROR', message: 'ORC file is empty or could not be parsed.' } });
+      return;
+    }
+
+    const colNames: string[] = JSON.parse(lines[0]);
+    const rawRows: Record<string, unknown>[] = lines.slice(1).map(l => JSON.parse(l));
+
+    const schema: ColumnSchema[] = colNames.map((name, index) => {
+      let inferredType: InferredType = 'string';
+      for (let i = 0; i < Math.min(rawRows.length, 1000); i++) {
+        const v = rawRows[i][name];
+        if (v === null || v === undefined) continue;
+        if (typeof v === 'number') { inferredType = 'number'; break; }
+        if (typeof v === 'boolean') { inferredType = 'boolean'; break; }
+        if (typeof v === 'string') {
+          if (/^\d{4}-\d{2}-\d{2}/.test(v)) { inferredType = 'date'; break; }
+          inferredType = 'string'; break;
+        }
+      }
+      return { name, index, inferredType, nullable: true };
+    });
+
+    const rows: CellValue[][] = rawRows.map(r =>
+      colNames.map(name => {
+        const v = r[name];
+        if (v === null || v === undefined) return null;
+        if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'string') return v;
+        return String(v);
+      })
+    );
+
+    const duckBundles = {
+      eh: { mainWorkerB64: '', mainModuleB64: '' },
+      extensions: { parquetB64: '', jsonB64: '' },
+      parquetWasmB64,
+    };
+
+    send({
+      type: 'INIT',
+      payload: {
+        fileType: 'orc',
+        fileName,
+        totalRows: rows.length,
+        totalBytes,
+        schema,
+        firstChunk: { rows: [], startRow: 0, endRow: 0 },
+        sidecar: document.sidecar,
+        duckWorkerUrl,
+      },
+    });
+
+    panel.webview.postMessage({
+      type: '__RAW_ROWS__',
+      payload: { schema, rows, duckBundles },
+    });
+  }
+
+  // ── Avro: read host-side via avsc, send rows as JSON ─────────────────────
+
+  private async _sendAvroData(
+    document: DocumentModel,
+    panel: vscode.WebviewPanel,
+    fileName: string,
+    totalBytes: number,
+    parquetWasmB64: string,
+    duckWorkerUrl: string,
+  ): Promise<void> {
+    const send = (m: HostMessage) => panel.webview.postMessage(m);
+
+    // avsc requires a file path, so write bytes to a temp file and clean up after.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const avsc = require('avsc') as typeof import('avsc');
+    const os = await import('os');
+    const fs = await import('fs');
+    const tmp = path.join(os.tmpdir(), `gm_avro_${Date.now()}.avro`);
+
+    try {
+      const fileBytes = await GridEditorProvider._fileReader.readAll(document.uri);
+      fs.writeFileSync(tmp, Buffer.from(fileBytes));
+
+      const records = await new Promise<Record<string, unknown>[]>((resolve, reject) => {
+        const rows: Record<string, unknown>[] = [];
+        const decoder = avsc.createFileDecoder(tmp);
+        decoder.on('data', (r: Record<string, unknown>) => rows.push(r));
+        decoder.on('end', () => resolve(rows));
+        decoder.on('error', reject);
+      });
+
+      if (records.length === 0) {
+        send({ type: 'ERROR', payload: { code: 'READ_ERROR', message: 'Avro file contains no records.' } });
+        return;
+      }
+
+      const colNames = Object.keys(records[0]);
+      const schema: ColumnSchema[] = colNames.map((name, index) => {
+        let inferredType: InferredType = 'string';
+        for (let i = 0; i < Math.min(records.length, 1000); i++) {
+          const v = records[i][name];
+          if (v === null || v === undefined) continue;
+          if (typeof v === 'number') { inferredType = 'number'; break; }
+          if (typeof v === 'boolean') { inferredType = 'boolean'; break; }
+          if (typeof v === 'string') {
+            if (/^\d{4}-\d{2}-\d{2}/.test(v)) { inferredType = 'date'; break; }
+            inferredType = 'string'; break;
+          }
+        }
+        return { name, index, inferredType, nullable: true };
+      });
+
+      const rows: CellValue[][] = records.map(r =>
+        colNames.map(name => {
+          const v = r[name];
+          if (v === null || v === undefined) return null;
+          if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'string') return v;
+          return String(v);
+        })
+      );
+
+      const duckBundles = {
+        eh: { mainWorkerB64: '', mainModuleB64: '' },
+        extensions: { parquetB64: '', jsonB64: '' },
+        parquetWasmB64,
+      };
+
+      send({
+        type: 'INIT',
+        payload: {
+          fileType: 'avro',
+          fileName,
+          totalRows: rows.length,
+          totalBytes,
+          schema,
+          firstChunk: { rows: [], startRow: 0, endRow: 0 },
+          sidecar: document.sidecar,
+          duckWorkerUrl,
+        },
+      });
+
+      panel.webview.postMessage({
+        type: '__RAW_ROWS__',
+        payload: { schema, rows, duckBundles },
+      });
+    } finally {
+      try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+    }
   }
 
   private async _handleExport(

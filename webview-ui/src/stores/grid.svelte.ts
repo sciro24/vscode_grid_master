@@ -9,7 +9,7 @@ type ChunkCache = Map<number, CellValue[][]>;
 
 class GridStore {
   // File metadata
-  fileType = $state<'csv' | 'parquet' | 'arrow' | 'json'>('csv');
+  fileType = $state<'csv' | 'parquet' | 'arrow' | 'json' | 'excel' | 'avro' | 'sqlite' | 'orc'>('csv');
   fileName = $state('');
   totalRows = $state(0);
   filteredRows = $state(0);
@@ -387,8 +387,18 @@ class GridStore {
 
   // ── Private ───────────────────────────────────────────────────────────────
 
+  receiveRawRows(schema: ColumnSchema[], rows: CellValue[][]): void {
+    this.schema = schema;
+    this.totalRows = rows.length;
+    this.filteredRows = rows.length;
+    this._csvAllRows = rows;
+    this._computeAutoWidths(schema, rows);
+    this._storeChunk(0, rows.slice(0, CHUNK_SIZE));
+    uiStore.setLoading(false);
+  }
+
   private _requestChunk(startRow: number, endRow: number): void {
-    if (this.fileType === 'csv') {
+    if (this.fileType === 'csv' || this.fileType === 'sqlite' || this.fileType === 'avro' || this.fileType === 'orc') {
       this._serveCsvChunk(startRow, endRow);
       return;
     }

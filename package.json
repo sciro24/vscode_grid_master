@@ -2,18 +2,30 @@
   "name": "grid-master",
   "displayName": "Grid Master",
   "description": "Open CSV, TSV, Parquet, Arrow, JSON and JSONL files as a fast spreadsheet inside VS Code — sort, filter, search, edit and color columns without leaving your editor.",
-  "version": "0.1.0",
-  "publisher": "grid-master",
+  "version": "0.2.0",
+  "publisher": "DiegoScirocco",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-org/vscode-grid-master"
+    "url": "https://github.com/sciro24/vscode_grid_master"
   },
   "engines": {
     "vscode": "^1.74.0"
   },
-  "categories": ["Data Science", "Visualization", "Other"],
-  "keywords": ["csv", "parquet", "arrow", "data", "grid", "table", "viewer"],
+  "categories": [
+    "Data Science",
+    "Visualization",
+    "Other"
+  ],
+  "keywords": [
+    "csv",
+    "parquet",
+    "arrow",
+    "data",
+    "grid",
+    "table",
+    "viewer"
+  ],
   "icon": "assets/icon.png",
   "activationEvents": [],
   "main": "./dist/extension.js",
@@ -23,8 +35,12 @@
         "viewType": "gridMaster.csvEditor",
         "displayName": "Grid Master",
         "selector": [
-          { "filenamePattern": "*.csv" },
-          { "filenamePattern": "*.tsv" }
+          {
+            "filenamePattern": "*.csv"
+          },
+          {
+            "filenamePattern": "*.tsv"
+          }
         ],
         "priority": "default"
       },
@@ -32,8 +48,12 @@
         "viewType": "gridMaster.parquetEditor",
         "displayName": "Grid Master",
         "selector": [
-          { "filenamePattern": "*.parquet" },
-          { "filenamePattern": "*.parq" }
+          {
+            "filenamePattern": "*.parquet"
+          },
+          {
+            "filenamePattern": "*.parq"
+          }
         ],
         "priority": "default"
       },
@@ -41,8 +61,12 @@
         "viewType": "gridMaster.arrowEditor",
         "displayName": "Grid Master",
         "selector": [
-          { "filenamePattern": "*.arrow" },
-          { "filenamePattern": "*.feather" }
+          {
+            "filenamePattern": "*.arrow"
+          },
+          {
+            "filenamePattern": "*.feather"
+          }
         ],
         "priority": "default"
       },
@@ -50,8 +74,67 @@
         "viewType": "gridMaster.jsonEditor",
         "displayName": "Grid Master",
         "selector": [
-          { "filenamePattern": "*.jsonl" },
-          { "filenamePattern": "*.ndjson" }
+          {
+            "filenamePattern": "*.jsonl"
+          },
+          {
+            "filenamePattern": "*.ndjson"
+          }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "gridMaster.excelEditor",
+        "displayName": "Grid Master",
+        "selector": [
+          {
+            "filenamePattern": "*.xlsx"
+          },
+          {
+            "filenamePattern": "*.xlsb"
+          },
+          {
+            "filenamePattern": "*.xls"
+          },
+          {
+            "filenamePattern": "*.xlsm"
+          }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "gridMaster.avroEditor",
+        "displayName": "Grid Master",
+        "selector": [
+          {
+            "filenamePattern": "*.avro"
+          }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "gridMaster.sqliteEditor",
+        "displayName": "Grid Master",
+        "selector": [
+          {
+            "filenamePattern": "*.db"
+          },
+          {
+            "filenamePattern": "*.sqlite"
+          },
+          {
+            "filenamePattern": "*.sqlite3"
+          }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "gridMaster.orcEditor",
+        "displayName": "Grid Master",
+        "selector": [
+          {
+            "filenamePattern": "*.orc"
+          }
         ],
         "priority": "default"
       }
@@ -83,14 +166,14 @@
       "explorer/context": [
         {
           "command": "gridMaster.openWith",
-          "when": "resourceExtname =~ /\\.(csv|tsv|parquet|parq|arrow|feather|json|jsonl|ndjson)$/i",
+          "when": "resourceExtname =~ /\\.(csv|tsv|parquet|parq|arrow|feather|json|jsonl|ndjson|xlsx|xlsb|xls|xlsm|avro|db|sqlite|sqlite3|orc)$/i",
           "group": "navigation@10"
         }
       ],
       "editor/title/context": [
         {
           "command": "gridMaster.openWith",
-          "when": "resourceExtname =~ /\\.(csv|tsv|parquet|parq|arrow|feather|json|jsonl|ndjson)$/i",
+          "when": "resourceExtname =~ /\\.(csv|tsv|parquet|parq|arrow|feather|json|jsonl|ndjson|xlsx|xlsb|xls|xlsm|avro|db|sqlite|sqlite3|orc)$/i",
           "group": "navigation@10"
         }
       ]
@@ -142,6 +225,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
+    "@types/sql.js": "^1.4.11",
     "@types/vscode": "^1.74.0",
     "@typescript-eslint/eslint-plugin": "^6.0.0",
     "@typescript-eslint/parser": "^6.0.0",
@@ -152,5 +236,9 @@
     "eslint": "^8.50.0",
     "ovsx": "^0.8.0",
     "typescript": "^5.2.0"
+  },
+  "dependencies": {
+    "avsc": "^5.7.9",
+    "sql.js": "^1.14.1"
   }
 }

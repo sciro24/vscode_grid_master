@@ -5,7 +5,7 @@ export const SMALL_FILE_THRESHOLD_BYTES = 5 * 1024 * 1024;   // 5MB
 export const LARGE_FILE_THRESHOLD_BYTES = 50 * 1024 * 1024;  // 50MB
 export const TYPE_INFERENCE_SAMPLE_ROWS = 1000;
 
-export const SUPPORTED_FILE_TYPES = ['csv', 'tsv', 'txt', 'parquet', 'parq', 'arrow', 'feather', 'json', 'jsonl', 'ndjson'] as const;
+export const SUPPORTED_FILE_TYPES = ['csv', 'tsv', 'txt', 'parquet', 'parq', 'arrow', 'feather', 'json', 'jsonl', 'ndjson', 'xlsx', 'xlsb', 'xls', 'xlsm', 'avro', 'db', 'sqlite', 'sqlite3', 'orc'] as const;
 export type SupportedFileType = typeof SUPPORTED_FILE_TYPES[number];
 
 export const VIEW_TYPES = {
@@ -13,4 +13,8 @@ export const VIEW_TYPES = {
   PARQUET: 'gridMaster.parquetEditor',
   ARROW: 'gridMaster.arrowEditor',
   JSON: 'gridMaster.jsonEditor',
+  EXCEL: 'gridMaster.excelEditor',
+  AVRO: 'gridMaster.avroEditor',
+  SQLITE: 'gridMaster.sqliteEditor',
+  ORC: 'gridMaster.orcEditor',
 } as const;

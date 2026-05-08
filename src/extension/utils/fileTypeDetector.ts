@@ -13,6 +13,19 @@ export function detectFileType(uri: { fsPath: string }): SupportedFileType {
     case 'jsonl':
     case 'ndjson':
       return 'json';
+    case 'xlsx':
+    case 'xlsb':
+    case 'xls':
+    case 'xlsm':
+      return 'xlsx';
+    case 'avro':
+      return 'avro';
+    case 'db':
+    case 'sqlite':
+    case 'sqlite3':
+      return 'db';
+    case 'orc':
+      return 'orc';
     default:
       return 'csv';
   }

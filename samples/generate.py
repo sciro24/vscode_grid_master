@@ -1,13 +1,17 @@
-"""Generate sample data files (csv, parquet, arrow, json, jsonl) for testing Grid Master.
+"""Generate sample data files for testing Grid Master.
 
 Run: python3 samples/generate.py
+Requires: pip3 install pandas pyarrow openpyxl fastavro pyorc
 """
 import json
 import random
+import sqlite3
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pyarrow.feather as feather
+import fastavro
+import pyorc
 from pathlib import Path
 
 random.seed(42)
@@ -66,6 +70,72 @@ print(f"wrote {OUT / 'flights.jsonl'}")
 # TSV (tab-separated values)
 df.to_csv(OUT / "flights.tsv", index=False, sep='\t')
 print(f"wrote {OUT / 'flights.tsv'} ({len(df)} rows)")
+
+# XLSX (Excel)
+df.to_excel(OUT / "flights.xlsx", index=False, engine="openpyxl")
+print(f"wrote {OUT / 'flights.xlsx'} ({len(df)} rows)")
+
+# XLSB — true binary xlsb requires proprietary tooling; openpyxl writes xlsx-compatible
+# content regardless of extension. SheetJS (used by the extension) reads it correctly.
+df.to_excel(OUT / "flights.xlsb", index=False, engine="openpyxl")
+print(f"wrote {OUT / 'flights.xlsb'} (xlsx content, .xlsb extension for format testing)")
+
+# Avro
+avro_schema = {
+    "type": "record",
+    "name": "Flight",
+    "fields": [
+        {"name": "fl_date",            "type": "string"},
+        {"name": "year",               "type": "int"},
+        {"name": "month",              "type": "int"},
+        {"name": "op_unique_carrier",  "type": "string"},
+        {"name": "origin",             "type": "string"},
+        {"name": "dest",               "type": "string"},
+        {"name": "dep_delay",          "type": "double"},
+        {"name": "arr_delay",          "type": "double"},
+        {"name": "cancelled",          "type": "boolean"},
+        {"name": "carrier_delay",      "type": "double"},
+        {"name": "weather_delay",      "type": "double"},
+        {"name": "nas_delay",          "type": "double"},
+        {"name": "security_delay",     "type": "double"},
+        {"name": "late_aircraft_delay","type": "double"},
+    ]
+}
+parsed_schema = fastavro.parse_schema(avro_schema)
+avro_rows = [
+    {**r, "cancelled": bool(r["cancelled"]),
+           "security_delay": float(r["security_delay"])}
+    for r in rows
+]
+with open(OUT / "flights.avro", "wb") as f:
+    fastavro.writer(f, parsed_schema, avro_rows)
+print(f"wrote {OUT / 'flights.avro'} ({len(avro_rows)} rows)")
+
+# SQLite
+sqlite_path = OUT / "flights.db"
+sqlite_path.unlink(missing_ok=True)
+con = sqlite3.connect(sqlite_path)
+df.to_sql("flights", con, index=False, if_exists="replace")
+# add a second table for multi-table testing
+carriers_df = pd.DataFrame({"code": list(set(r["op_unique_carrier"] for r in rows))})
+carriers_df.to_sql("carriers", con, index=False, if_exists="replace")
+con.close()
+print(f"wrote {OUT / 'flights.db'} (tables: flights, carriers)")
+
+# ORC
+orc_path = OUT / "flights.orc"
+orc_schema = "struct<fl_date:string,year:int,month:int,op_unique_carrier:string,origin:string,dest:string,dep_delay:double,arr_delay:double,cancelled:boolean,carrier_delay:double,weather_delay:double,nas_delay:double,security_delay:double,late_aircraft_delay:double>"
+with open(orc_path, "wb") as f:
+    with pyorc.Writer(f, orc_schema) as writer:
+        for r in rows:
+            writer.write((
+                r["fl_date"], r["year"], r["month"],
+                r["op_unique_carrier"], r["origin"], r["dest"],
+                r["dep_delay"], r["arr_delay"], bool(r["cancelled"]),
+                r["carrier_delay"], r["weather_delay"], r["nas_delay"],
+                float(r["security_delay"]), r["late_aircraft_delay"],
+            ))
+print(f"wrote {OUT / 'flights.orc'} ({len(rows)} rows)")
 
 # A small file mirroring the user's reproducer for the "2.024 year bug"
 small = pd.DataFrame([{

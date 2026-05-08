@@ -35,7 +35,7 @@ export class DocumentModel {
 
   constructor(
     public readonly uri: vscode.Uri,
-    public readonly fileType: 'csv' | 'parquet' | 'arrow' | 'json',
+    public readonly fileType: 'csv' | 'parquet' | 'arrow' | 'json' | 'excel' | 'avro' | 'sqlite' | 'orc',
   ) {}
 
   applyEdit(edit: Edit): void {

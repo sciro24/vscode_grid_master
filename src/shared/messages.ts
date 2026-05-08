@@ -14,7 +14,7 @@ export type HostMessage =
   | { type: 'ERROR';          payload: ErrorPayload };
 
 export interface InitPayload {
-  fileType: 'csv' | 'parquet' | 'arrow' | 'json';
+  fileType: 'csv' | 'parquet' | 'arrow' | 'json' | 'excel' | 'avro' | 'sqlite' | 'orc';
   fileName: string;
   totalRows: number;          // -1 = unknown (streaming)
   totalBytes: number;

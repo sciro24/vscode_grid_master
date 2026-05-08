@@ -3,6 +3,7 @@
 
 import * as arrow from 'apache-arrow';
 import init, { readParquet } from 'parquet-wasm/esm/parquet_wasm.js';
+import * as XLSX from 'xlsx';
 import type { CellValue, ColumnSchema, FilterSpec, SortSpec, InferredType } from '@shared/schema.js';
 import { CHUNK_SIZE } from '@shared/constants.js';
 
@@ -17,7 +18,7 @@ export type DuckDbBundleSet = {
 };
 
 export type DuckDbWorkerIn =
-  | { type: 'LOAD'; payload: { buffer: ArrayBuffer; fileType: 'parquet' | 'arrow' | 'json'; jsonFormat?: 'json' | 'ndjson'; bundles: DuckDbBundleSet } }
+  | { type: 'LOAD'; payload: { buffer: ArrayBuffer; fileType: 'parquet' | 'arrow' | 'json' | 'excel' | 'avro'; jsonFormat?: 'json' | 'ndjson'; bundles: DuckDbBundleSet } }
   | { type: 'LOAD_PARTS'; payload: { buffers: ArrayBuffer[]; fileType: 'parquet' | 'arrow'; bundles: DuckDbBundleSet } }
   | { type: 'GET_CHUNK'; payload: { requestId: string; startRow: number; endRow: number; filters?: FilterSpec[]; sort?: SortSpec; globalSearch?: string } }
   | { type: 'QUERY'; payload: { requestId: string; sql: string } };
@@ -55,7 +56,7 @@ self.onmessage = async (e: MessageEvent<DuckDbWorkerIn>) => {
 
 // ── Load ──────────────────────────────────────────────────────────────────────
 
-async function handleLoad(buffer: ArrayBuffer, fileType: 'parquet' | 'arrow' | 'json', bundles: DuckDbBundleSet, jsonFormat: 'json' | 'ndjson' = 'json'): Promise<void> {
+async function handleLoad(buffer: ArrayBuffer, fileType: 'parquet' | 'arrow' | 'json' | 'excel' | 'avro', bundles: DuckDbBundleSet, jsonFormat: 'json' | 'ndjson' = 'json'): Promise<void> {
   console.log('[GM worker] handleLoad', fileType, buffer.byteLength, 'bytes');
 
   let table: arrow.Table | null = null;
@@ -96,6 +97,29 @@ async function handleLoad(buffer: ArrayBuffer, fileType: 'parquet' | 'arrow' | '
       }
       throw e;
     }
+  } else if (fileType === 'excel') {
+    const wb = XLSX.read(new Uint8Array(buffer), { type: 'array', dense: true });
+    const sheetName = wb.SheetNames[0];
+    const ws = wb.Sheets[sheetName];
+    // header:1 → array-of-arrays; defval ensures missing cells are null
+    const aoa: unknown[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: true }) as unknown[][];
+    if (aoa.length === 0) {
+      post({ type: 'READY', payload: { schema: [], totalRows: 0 } });
+      return;
+    }
+    const headers = (aoa[0] as unknown[]).map((h, i) => (h != null ? String(h) : `col_${i}`));
+    const dataRows = aoa.slice(1);
+    _schema = headers.map((name, colIdx) => ({
+      name,
+      index: colIdx,
+      inferredType: inferColumnTypeFromArray(dataRows as unknown[][], colIdx),
+      nullable: true,
+    }));
+    _allRows = dataRows.map(row =>
+      headers.map((_, ci) => coerceJsonValue((row as unknown[])[ci]))
+    );
+    post({ type: 'READY', payload: { schema: _schema, totalRows: _allRows.length } });
+    return;
   } else {
     // JSON / NDJSON — parse directly; skip arrow.tableFromJSON which uses
     // `new Function` internally and is blocked by the webview CSP.
@@ -223,6 +247,21 @@ function coerceJsonValue(v: unknown): CellValue {
   if (typeof v === 'string') return v;
   if (v instanceof Date) return v.toISOString();
   return JSON.stringify(v);
+}
+
+function inferColumnTypeFromArray(rows: unknown[][], colIdx: number): InferredType {
+  for (const row of rows) {
+    const v = row[colIdx];
+    if (v === null || v === undefined) continue;
+    if (typeof v === 'boolean') return 'boolean';
+    if (typeof v === 'number') return 'number';
+    if (typeof v === 'string') {
+      if (!isNaN(Date.parse(v)) && /\d{4}-\d{2}-\d{2}/.test(v)) return 'date';
+      return 'string';
+    }
+    return 'string';
+  }
+  return 'string';
 }
 
 function inferJsonColumnType(rows: Record<string, unknown>[], name: string): InferredType {

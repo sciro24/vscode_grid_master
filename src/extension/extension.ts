@@ -11,6 +11,15 @@ const FILE_ASSOCIATIONS: Record<string, string> = {
   '*.feather': VIEW_TYPES.ARROW,
   '*.jsonl':   VIEW_TYPES.JSON,
   '*.ndjson':  VIEW_TYPES.JSON,
+  '*.xlsx':    VIEW_TYPES.EXCEL,
+  '*.xlsb':    VIEW_TYPES.EXCEL,
+  '*.xls':     VIEW_TYPES.EXCEL,
+  '*.xlsm':    VIEW_TYPES.EXCEL,
+  '*.avro':    VIEW_TYPES.AVRO,
+  '*.db':      VIEW_TYPES.SQLITE,
+  '*.sqlite':  VIEW_TYPES.SQLITE,
+  '*.sqlite3': VIEW_TYPES.SQLITE,
+  '*.orc':     VIEW_TYPES.ORC,
 };
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -19,6 +28,10 @@ export function activate(context: vscode.ExtensionContext): void {
     GridEditorProvider.register(context, VIEW_TYPES.PARQUET),
     GridEditorProvider.register(context, VIEW_TYPES.ARROW),
     GridEditorProvider.register(context, VIEW_TYPES.JSON),
+    GridEditorProvider.register(context, VIEW_TYPES.EXCEL),
+    GridEditorProvider.register(context, VIEW_TYPES.AVRO),
+    GridEditorProvider.register(context, VIEW_TYPES.SQLITE),
+    GridEditorProvider.register(context, VIEW_TYPES.ORC),
   );
 
   context.subscriptions.push(
@@ -38,9 +51,13 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!target) return;
       const ext = target.path.split('.').pop()?.toLowerCase() ?? '';
       const viewType =
-        ext === 'parquet' || ext === 'parq' ? VIEW_TYPES.PARQUET :
-        ext === 'arrow'   || ext === 'feather' ? VIEW_TYPES.ARROW :
+        ext === 'parquet' || ext === 'parq'               ? VIEW_TYPES.PARQUET :
+        ext === 'arrow'   || ext === 'feather'             ? VIEW_TYPES.ARROW :
         ext === 'json'    || ext === 'jsonl' || ext === 'ndjson' ? VIEW_TYPES.JSON :
+        ext === 'xlsx'    || ext === 'xlsb' || ext === 'xls' || ext === 'xlsm' ? VIEW_TYPES.EXCEL :
+        ext === 'avro'                                     ? VIEW_TYPES.AVRO :
+        ext === 'db'      || ext === 'sqlite' || ext === 'sqlite3' ? VIEW_TYPES.SQLITE :
+        ext === 'orc'                                      ? VIEW_TYPES.ORC :
         VIEW_TYPES.CSV;
       await vscode.commands.executeCommand('vscode.openWith', target, viewType);
     }),
