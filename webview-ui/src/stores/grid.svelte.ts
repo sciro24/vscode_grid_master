@@ -383,14 +383,21 @@ class GridStore {
     this._getOrCreateWorker().then(worker => {
       const requestId = `chunk-${startRow}-${Date.now()}`;
       const effectiveEndRow = Math.min(endRow, this.totalRows > 0 ? this.totalRows : endRow);
+      // Svelte 5 $state values are Proxy objects — structured-clone (used by
+      // postMessage) cannot handle them. Serialize to plain JS via JSON round-trip.
+      const filters = this.filters.length > 0
+        ? JSON.parse(JSON.stringify(this.filters)) as FilterSpec[]
+        : undefined;
+      const sort = this.sort ? JSON.parse(JSON.stringify(this.sort)) as SortSpec : undefined;
       const msg: DuckDbWorkerIn = {
         type: 'GET_CHUNK',
         payload: {
           requestId,
           startRow,
           endRow: effectiveEndRow,
-          filters: this.filters.length > 0 ? this.filters : undefined,
-          sort: this.sort ?? undefined,
+          filters,
+          sort,
+          globalSearch: this.globalSearch || undefined,
         },
       };
       worker.postMessage(msg);

@@ -18,7 +18,7 @@ export type DuckDbBundleSet = {
 
 export type DuckDbWorkerIn =
   | { type: 'LOAD'; payload: { buffer: ArrayBuffer; fileType: 'parquet' | 'arrow' | 'json'; jsonFormat?: 'json' | 'ndjson'; bundles: DuckDbBundleSet } }
-  | { type: 'GET_CHUNK'; payload: { requestId: string; startRow: number; endRow: number; filters?: FilterSpec[]; sort?: SortSpec } }
+  | { type: 'GET_CHUNK'; payload: { requestId: string; startRow: number; endRow: number; filters?: FilterSpec[]; sort?: SortSpec; globalSearch?: string } }
   | { type: 'QUERY'; payload: { requestId: string; sql: string } };
 
 export type DuckDbWorkerOut =
@@ -82,7 +82,18 @@ async function handleLoad(buffer: ArrayBuffer, fileType: 'parquet' | 'arrow' | '
     const wasmTable = readParquet(new Uint8Array(buffer));
     table = arrow.tableFromIPC(wasmTable.intoIPCStream());
   } else if (fileType === 'arrow') {
-    table = arrow.tableFromIPC(new Uint8Array(buffer));
+    try {
+      table = arrow.tableFromIPC(new Uint8Array(buffer));
+    } catch (e) {
+      const msg = String(e);
+      if (msg.includes('codec not found') || msg.includes('compress')) {
+        throw new Error(
+          'This Arrow file uses compression (LZ4/ZSTD) which is not supported in the browser. ' +
+          'Re-export it without compression: feather.write_feather(table, path, compression="uncompressed")'
+        );
+      }
+      throw e;
+    }
   } else {
     // JSON / NDJSON — parse directly; skip arrow.tableFromJSON which uses
     // `new Function` internally and is blocked by the webview CSP.
@@ -130,9 +141,18 @@ async function handleLoad(buffer: ArrayBuffer, fileType: 'parquet' | 'arrow' | '
 function coerceArrowValue(v: unknown): CellValue {
   if (v === null || v === undefined) return null;
   if (typeof v === 'bigint') return Number(v);
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'number') return v;
+  if (typeof v === 'string') return v;
   if (v instanceof Date) return v.toISOString();
-  if (typeof v === 'object') return JSON.stringify(v);
-  return v as CellValue;
+  // Arrow typed-array elements (Uint32, Int64 proxies, Utf8, etc.) — coerce to
+  // a plain primitive so structured-clone can transfer them across the worker boundary.
+  if (typeof (v as { valueOf?: unknown }).valueOf === 'function') {
+    const prim = (v as { valueOf(): unknown }).valueOf();
+    if (typeof prim === 'number' || typeof prim === 'boolean' || typeof prim === 'string') return prim;
+    if (typeof prim === 'bigint') return Number(prim);
+  }
+  return JSON.stringify(v);
 }
 
 function coerceJsonValue(v: unknown): CellValue {
@@ -174,13 +194,19 @@ function handleGetChunk(payload: {
   endRow: number;
   filters?: FilterSpec[];
   sort?: SortSpec;
+  globalSearch?: string;
 }): void {
-  const { requestId, startRow, endRow, filters, sort } = payload;
+  const { requestId, startRow, endRow, filters, sort, globalSearch } = payload;
 
   let rows = _allRows;
 
   if (filters && filters.length > 0) {
     rows = rows.filter(row => filters.every(f => applyFilter(row, f)));
+  }
+
+  const q = globalSearch?.trim().toLowerCase();
+  if (q) {
+    rows = rows.filter(row => row.some(cell => String(cell ?? '').toLowerCase().includes(q)));
   }
 
   if (sort) {
