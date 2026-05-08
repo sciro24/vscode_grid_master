@@ -14,6 +14,15 @@
 
   function handleSave() {
     postMessage({ type: 'SAVE' });
+    gridStore.clearEditHistory();
+  }
+
+  function handleUndo() {
+    gridStore.undoLastEdit();
+  }
+
+  function handleDiscard() {
+    gridStore.discardAllEdits();
   }
 
   function handleExport() {
@@ -31,6 +40,7 @@
   const fileName = $derived(gridStore.fileName);
   const isDirty = $derived(uiStore.isDirty);
   const colorsActive = $derived(gridStore.colColors.size > 0);
+  const canUndo = $derived(gridStore.editCount > 0);
 </script>
 
 <div class="toolbar">
@@ -107,7 +117,23 @@
       <svg viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M8 12l-4-4h2.5V2h3v6H12L8 12zM1 14h14v1.5H1V14z"/></svg>
     </button>
 
+    {#if canUndo}
+      <button class="btn btn-ghost" onclick={handleUndo} title="Undo last edit">
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+          <path d="M5.7 4.3a1 1 0 0 1 0 1.4L4.4 7H10a4 4 0 0 1 0 8H7a1 1 0 0 1 0-2h3a2 2 0 0 0 0-4H4.4l1.3 1.3a1 1 0 1 1-1.4 1.4l-3-3a1 1 0 0 1 0-1.4l3-3a1 1 0 0 1 1.4 0z"/>
+        </svg>
+        Undo
+      </button>
+    {/if}
+
     {#if isDirty}
+      <button class="btn btn-ghost btn-discard" onclick={handleDiscard} title="Discard all changes">
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+          <path d="M5 1h6v1h4v2H1V2h4V1zm-2 4h10l-1 10H4L3 5z"/>
+        </svg>
+        Don't save
+      </button>
+
       <button class="btn btn-primary" onclick={handleSave}>
         Save
       </button>
@@ -248,6 +274,14 @@
   .btn-active {
     color: var(--gm-accent, var(--vscode-focusBorder));
     background: var(--gm-hover-bg, var(--vscode-list-hoverBackground));
+  }
+
+  .btn-discard {
+    color: var(--vscode-errorForeground, #f48771);
+  }
+
+  .btn-discard:hover {
+    background: var(--vscode-inputValidation-errorBackground, rgba(244, 135, 113, 0.15));
   }
 
   .col-panel-wrap {

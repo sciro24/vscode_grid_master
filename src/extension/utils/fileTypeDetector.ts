@@ -9,6 +9,10 @@ export function detectFileType(uri: { fsPath: string }): SupportedFileType {
     case 'arrow':
     case 'feather':
       return 'arrow';
+    case 'json':
+    case 'jsonl':
+    case 'ndjson':
+      return 'json';
     default:
       return 'csv';
   }

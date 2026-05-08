@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "rm -rf dist && GM_BUILD=worker vite build && GM_BUILD=main vite build",
     "preview": "vite preview"
   },
   "dependencies": {

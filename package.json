@@ -1,7 +1,7 @@
 {
   "name": "grid-master",
   "displayName": "Grid Master",
-  "description": "High-performance viewer and editor for CSV, Parquet and Arrow files",
+  "description": "Open CSV, TSV, Parquet, Arrow, JSON and JSONL files as a fast spreadsheet inside VS Code — sort, filter, search, edit and color columns without leaving your editor.",
   "version": "0.1.0",
   "publisher": "grid-master",
   "license": "MIT",
@@ -45,6 +45,15 @@
           { "filenamePattern": "*.feather" }
         ],
         "priority": "default"
+      },
+      {
+        "viewType": "gridMaster.jsonEditor",
+        "displayName": "Grid Master",
+        "selector": [
+          { "filenamePattern": "*.jsonl" },
+          { "filenamePattern": "*.ndjson" }
+        ],
+        "priority": "default"
       }
     ],
     "commands": [
@@ -74,14 +83,14 @@
       "explorer/context": [
         {
           "command": "gridMaster.openWith",
-          "when": "resourceExtname =~ /\\.(csv|tsv|parquet|parq|arrow|feather)$/i",
+          "when": "resourceExtname =~ /\\.(csv|tsv|parquet|parq|arrow|feather|json|jsonl|ndjson)$/i",
           "group": "navigation@10"
         }
       ],
       "editor/title/context": [
         {
           "command": "gridMaster.openWith",
-          "when": "resourceExtname =~ /\\.(csv|tsv|parquet|parq|arrow|feather)$/i",
+          "when": "resourceExtname =~ /\\.(csv|tsv|parquet|parq|arrow|feather|json|jsonl|ndjson)$/i",
           "group": "navigation@10"
         }
       ]

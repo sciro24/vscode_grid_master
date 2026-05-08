@@ -1,12 +1,21 @@
 // DuckDB-WASM Web Worker
-// DuckDB is loaded dynamically at runtime to avoid Vite bundling issues.
-// The import() call below is intentionally dynamic.
+// DuckDB is bundled into this worker by Vite. The runtime asset URLs (wasm +
+// inner worker) are provided by the host as same-origin webview URIs so the
+// CSP doesn't have to allow jsdelivr.
+
+import * as duckdb from '@duckdb/duckdb-wasm';
 
 import type { CellValue, ColumnSchema, FilterSpec, SortSpec, InferredType } from '@shared/schema.js';
 import { CHUNK_SIZE } from '@shared/constants.js';
 
+export type DuckDbBundleSet = {
+  mvp: { mainModule: string; mainWorker: string };
+  eh:  { mainModule: string; mainWorker: string };
+  coi?: { mainModule: string; mainWorker: string; pthreadWorker: string };
+};
+
 export type DuckDbWorkerIn =
-  | { type: 'LOAD'; payload: { buffer: ArrayBuffer; fileType: 'parquet' | 'arrow' } }
+  | { type: 'LOAD'; payload: { buffer: ArrayBuffer; fileType: 'parquet' | 'arrow' | 'json'; jsonFormat?: 'json' | 'ndjson'; bundles: DuckDbBundleSet } }
   | { type: 'GET_CHUNK'; payload: { requestId: string; startRow: number; endRow: number; filters?: FilterSpec[]; sort?: SortSpec } }
   | { type: 'QUERY'; payload: { requestId: string; sql: string } };
 
@@ -33,7 +42,7 @@ self.onmessage = async (e: MessageEvent<DuckDbWorkerIn>) => {
   const msg = e.data;
   try {
     switch (msg.type) {
-      case 'LOAD':   await handleLoad(msg.payload.buffer, msg.payload.fileType); break;
+      case 'LOAD':   await handleLoad(msg.payload.buffer, msg.payload.fileType, msg.payload.bundles, msg.payload.jsonFormat); break;
       case 'GET_CHUNK': await handleGetChunk(msg.payload); break;
       case 'QUERY':  await handleQuery(msg.payload); break;
     }
@@ -44,18 +53,14 @@ self.onmessage = async (e: MessageEvent<DuckDbWorkerIn>) => {
 
 // ── Load ──────────────────────────────────────────────────────────────────────
 
-async function handleLoad(buffer: ArrayBuffer, fileType: 'parquet' | 'arrow'): Promise<void> {
-  // The specifier is built at runtime so Vite's static analyser won't
-  // try to bundle or resolve @duckdb/duckdb-wasm during the build.
-  const specifier = ['@duckdb', 'duckdb-wasm'].join('/');
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const duckdb = await import(/* @vite-ignore */ specifier) as any;
+async function handleLoad(buffer: ArrayBuffer, fileType: 'parquet' | 'arrow' | 'json', bundles: DuckDbBundleSet, jsonFormat: 'json' | 'ndjson' = 'json'): Promise<void> {
+  const bundle = await duckdb.selectBundle(bundles);
 
-  const JSDELIVR_BUNDLES = duckdb.getJsDelivrBundles();
-  const bundle = await duckdb.selectBundle(JSDELIVR_BUNDLES);
-
+  // The selected mainWorker URL is a webview URI (vscode-cdn.net), which is
+  // cross-origin to the worker — so we wrap it in a same-origin blob via
+  // importScripts to keep the browser happy.
   const workerUrl = URL.createObjectURL(
-    new Blob([`importScripts("${bundle.mainWorker}");`], { type: 'text/javascript' }),
+    new Blob([`importScripts("${bundle.mainWorker}");`], { type: 'application/javascript' }),
   );
   const innerWorker = new Worker(workerUrl);
   const logger = new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING);
@@ -64,13 +69,22 @@ async function handleLoad(buffer: ArrayBuffer, fileType: 'parquet' | 'arrow'): P
   await _db.instantiate(bundle.mainModule, bundle.pthreadWorker);
   _conn = await _db.connect();
 
-  const ext = fileType === 'arrow' ? 'arrow' : 'parquet';
+  const extByType: Record<string, string> = { parquet: 'parquet', arrow: 'arrow', json: jsonFormat === 'ndjson' ? 'ndjson' : 'json' };
+  const ext = extByType[fileType];
   const fileName = `file.${ext}`;
   await _db.registerFileBuffer(fileName, new Uint8Array(buffer));
 
-  const viewSql = fileType === 'parquet'
-    ? `CREATE VIEW data AS SELECT * FROM read_parquet('${fileName}')`
-    : `CREATE VIEW data AS SELECT * FROM read_arrow('${fileName}')`;
+  let viewSql: string;
+  if (fileType === 'parquet') {
+    viewSql = `CREATE VIEW data AS SELECT * FROM read_parquet('${fileName}')`;
+  } else if (fileType === 'arrow') {
+    viewSql = `CREATE VIEW data AS SELECT * FROM read_arrow('${fileName}')`;
+  } else {
+    // JSON: use ndjson format hint when applicable. read_json_auto handles both
+    // arrays-of-objects and ndjson with `format='auto'`.
+    const fmt = jsonFormat === 'ndjson' ? 'newline_delimited' : 'auto';
+    viewSql = `CREATE VIEW data AS SELECT * FROM read_json_auto('${fileName}', format='${fmt}')`;
+  }
   await _conn.query(viewSql);
 
   const schemaRes = await _conn.query(`DESCRIBE data`);

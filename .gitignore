@@ -11,13 +11,24 @@ webview-ui/dist/
 *.vsix
 
 # Test artefacts and fixtures
-test/
 test-data/
 .vscode-test/
 coverage/
 
+# Generated sample data files (keep generate.py, ignore the artefacts)
+samples/*.csv
+samples/*.tsv
+samples/*.parquet
+samples/*.parq
+samples/*.arrow
+samples/*.feather
+samples/*.json
+samples/*.jsonl
+samples/*.ndjson
+
 # Editor / OS
 .DS_Store
+**/.DS_Store
 .vscode/
 .idea/
 

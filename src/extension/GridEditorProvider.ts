@@ -34,10 +34,11 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
     _token: vscode.CancellationToken,
   ): Promise<DocumentModel> {
     const detectedType = detectFileType(uri);
-    // Normalise to the three types DocumentModel understands
-    const fileType: 'csv' | 'parquet' | 'arrow' =
+    // Normalise to the four types DocumentModel understands
+    const fileType: 'csv' | 'parquet' | 'arrow' | 'json' =
       detectedType === 'parquet' || detectedType === 'parq' ? 'parquet' :
       detectedType === 'arrow'   || detectedType === 'feather' ? 'arrow' :
+      detectedType === 'json'    || detectedType === 'jsonl' || detectedType === 'ndjson' ? 'json' :
       'csv';
 
     const doc = new DocumentModel(uri, fileType);
@@ -193,6 +194,24 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
         vscode.Uri.joinPath(this._context.extensionUri, 'webview-ui', 'dist', 'duckdb.worker.js'),
       ).toString();
 
+      const duckAsset = (file: string): string =>
+        panel.webview.asWebviewUri(
+          vscode.Uri.joinPath(this._context.extensionUri, 'webview-ui', 'dist', file),
+        ).toString();
+      // We don't ship COI — it requires cross-origin isolation that VS Code
+      // webviews don't provide. selectBundle picks EH on modern browsers and
+      // falls back to MVP otherwise.
+      const duckBundles = {
+        mvp: {
+          mainModule: duckAsset('duckdb-mvp.wasm'),
+          mainWorker: duckAsset('duckdb-browser-mvp.worker.js'),
+        },
+        eh: {
+          mainModule: duckAsset('duckdb-eh.wasm'),
+          mainWorker: duckAsset('duckdb-browser-eh.worker.js'),
+        },
+      };
+
       if (document.fileType === 'csv') {
         const raw = await GridEditorProvider._fileReader.readAll(document.uri);
         const text = new TextDecoder('utf-8').decode(raw);
@@ -211,6 +230,31 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
         });
 
         panel.webview.postMessage({ type: '__RAW_CSV__', payload: { text, totalBytes } });
+        return;
+      } else if (document.fileType === 'json') {
+        const bytes = await GridEditorProvider._fileReader.readAll(document.uri);
+        const ext = path.extname(document.uri.fsPath).toLowerCase();
+        const isNdjson = ext === '.jsonl' || ext === '.ndjson';
+
+        send({
+          type: 'INIT',
+          payload: {
+            fileType: 'json',
+            fileName,
+            totalRows: -1,
+            totalBytes,
+            schema: [],
+            firstChunk: { rows: [], startRow: 0, endRow: 0 },
+            sidecar: document.sidecar,
+            duckWorkerUrl,
+          },
+        });
+
+        const base64 = Buffer.from(bytes).toString('base64');
+        panel.webview.postMessage({
+          type: '__RAW_BINARY__',
+          payload: { base64, fileType: 'json', jsonFormat: isNdjson ? 'ndjson' : 'json', duckBundles },
+        });
         return;
       } else {
         const bytes = await GridEditorProvider._fileReader.readAll(document.uri);
@@ -232,7 +276,7 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
         const base64 = Buffer.from(bytes).toString('base64');
         panel.webview.postMessage({
           type: '__RAW_BINARY__',
-          payload: { base64, fileType: document.fileType },
+          payload: { base64, fileType: document.fileType, duckBundles },
         });
       }
 
@@ -249,7 +293,10 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
   ): Promise<void> {
     if (!document.isDirty && !destination) return;
     if (document.fileType !== 'csv') {
-      throw new Error('Save not yet supported for binary formats');
+      // Save for binary/json formats is deferred. For now we just clear the
+      // patch list so the editor doesn't loop on dirty-state.
+      document.clearPatches();
+      return;
     }
     // Patches are applied and serialized by the webview CSV worker.
     // Full write-back implementation is Milestone 4.
@@ -291,7 +338,7 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="Content-Security-Policy"
     content="default-src 'none';
-             script-src 'nonce-${nonce}' 'strict-dynamic' ${webview.cspSource};
+             script-src 'nonce-${nonce}' 'strict-dynamic' 'wasm-unsafe-eval' ${webview.cspSource};
              style-src 'unsafe-inline' ${webview.cspSource};
              img-src ${webview.cspSource} data:;
              font-src ${webview.cspSource};

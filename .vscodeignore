@@ -10,6 +10,7 @@ webview-ui/package-lock.json
 webview-ui/vite.config.ts
 test/**
 test-data/**
+samples/**
 .github/**
 .gitignore
 .eslintrc.json
@@ -19,3 +20,7 @@ esbuild.config.mjs
 **/.DS_Store
 node_modules/**
 out/**
+CLAUDE.md
+STATUS.md
+REPORT*.md
+SUMMARY*.md

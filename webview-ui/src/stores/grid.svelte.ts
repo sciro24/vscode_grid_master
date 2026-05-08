@@ -9,7 +9,7 @@ type ChunkCache = Map<number, CellValue[][]>;
 
 class GridStore {
   // File metadata
-  fileType = $state<'csv' | 'parquet' | 'arrow'>('csv');
+  fileType = $state<'csv' | 'parquet' | 'arrow' | 'json'>('csv');
   fileName = $state('');
   totalRows = $state(0);
   filteredRows = $state(0);
@@ -60,6 +60,10 @@ class GridStore {
   // Column stats cache
   private _statsCache = new Map<number, ColumnStats>();
 
+  // Edit history for in-webview undo / discard
+  private _editHistory: Array<{ row: number; col: number; oldValue: CellValue; newValue: CellValue }> = [];
+  editCount = $state(0);  // reactive proxy for _editHistory.length
+
   // ── Init ──────────────────────────────────────────────────────────────────
 
   init(payload: InitPayload): void {
@@ -87,10 +91,15 @@ class GridStore {
     const url = (globalThis as Record<string, unknown>)['__DUCK_WORKER_URL__'] as string | undefined;
     if (!url) { uiStore.setError('DuckDB worker URL not set'); return false; }
     try {
-      // Use a blob: URL so the Worker is same-origin with the webview.
-      const blob = new Blob([`importScripts(${JSON.stringify(url)});`], { type: 'application/javascript' });
+      // Module worker — the bundled duckdb.worker.js is an ES module that
+      // imports DuckDB internals. We wrap the (cross-origin) webview URL in
+      // a same-origin blob that re-exports it via `import`.
+      const blob = new Blob(
+        [`import ${JSON.stringify(url)};`],
+        { type: 'application/javascript' },
+      );
       const blobUrl = URL.createObjectURL(blob);
-      this.setDuckWorker(new Worker(blobUrl));
+      this.setDuckWorker(new Worker(blobUrl, { type: 'module' }));
     } catch (e) {
       uiStore.setError(`Could not create DuckDB worker: ${String(e)}`);
       return false;
@@ -123,7 +132,7 @@ class GridStore {
       for (let i = 0; i < SAMPLE; i++) {
         const v = rows[i]?.[col.index];
         if (v === null || v === undefined) continue;
-        const s = typeof v === 'number' ? v.toLocaleString() : String(v);
+        const s = String(v);
         if (s.length > maxLen) maxLen = s.length;
       }
       const w = Math.max(MIN_W, Math.min(MAX_W, Math.ceil(maxLen * CHAR_PX) + PADDING + TYPE_LABEL_PAD));
@@ -135,10 +144,15 @@ class GridStore {
     return this._autoWidths.get(colName);
   }
 
-  loadRawBinary(buffer: ArrayBuffer, fileType: 'parquet' | 'arrow'): void {
+  loadRawBinary(
+    buffer: ArrayBuffer,
+    fileType: 'parquet' | 'arrow' | 'json',
+    duckBundles: import('../workers/duckdb.worker.js').DuckDbBundleSet,
+    jsonFormat?: 'json' | 'ndjson',
+  ): void {
     this.fileType = fileType;
     if (!this._ensureDuckWorker()) return;
-    const msg: DuckDbWorkerIn = { type: 'LOAD', payload: { buffer, fileType } };
+    const msg: DuckDbWorkerIn = { type: 'LOAD', payload: { buffer, fileType, jsonFormat, bundles: duckBundles } };
     this._duckWorker!.postMessage(msg, [buffer]);
   }
 
@@ -173,11 +187,72 @@ class GridStore {
   setCellValue(row: number, col: number, value: CellValue): void {
     const chunkStart = Math.floor(row / CHUNK_SIZE) * CHUNK_SIZE;
     const chunk = this._cache.get(chunkStart);
+    let oldValue: CellValue = null;
     if (chunk) {
       const rowData = chunk[row - chunkStart];
-      if (rowData) rowData[col] = value;
+      if (rowData) {
+        oldValue = rowData[col] ?? null;
+        rowData[col] = value;
+      }
     }
+    // Mirror into the master CSV array so undo/discard and re-chunk see it.
+    if (this.fileType === 'csv' && this._csvAllRows[row]) {
+      if (oldValue === null && this._csvAllRows[row][col] !== undefined) {
+        oldValue = this._csvAllRows[row][col];
+      }
+      this._csvAllRows[row][col] = value;
+    }
+    this._editHistory.push({ row, col, oldValue, newValue: value });
+    this.editCount = this._editHistory.length;
+    this.cacheVersion++;
     uiStore.markDirty();
+  }
+
+  undoLastEdit(): boolean {
+    const last = this._editHistory.pop();
+    if (!last) return false;
+    this.editCount = this._editHistory.length;
+
+    const chunkStart = Math.floor(last.row / CHUNK_SIZE) * CHUNK_SIZE;
+    const chunk = this._cache.get(chunkStart);
+    if (chunk) {
+      const rowData = chunk[last.row - chunkStart];
+      if (rowData) rowData[last.col] = last.oldValue;
+    }
+    if (this.fileType === 'csv' && this._csvAllRows[last.row]) {
+      this._csvAllRows[last.row][last.col] = last.oldValue;
+    }
+    if (this._editHistory.length === 0) {
+      uiStore.isDirty = false;
+      uiStore.saved = true;
+    }
+    this.cacheVersion++;
+    return true;
+  }
+
+  discardAllEdits(): void {
+    // Walk the history in reverse, restoring each cell to its original value.
+    while (this._editHistory.length > 0) {
+      const e = this._editHistory.pop()!;
+      const chunkStart = Math.floor(e.row / CHUNK_SIZE) * CHUNK_SIZE;
+      const chunk = this._cache.get(chunkStart);
+      if (chunk) {
+        const rowData = chunk[e.row - chunkStart];
+        if (rowData) rowData[e.col] = e.oldValue;
+      }
+      if (this.fileType === 'csv' && this._csvAllRows[e.row]) {
+        this._csvAllRows[e.row][e.col] = e.oldValue;
+      }
+    }
+    this.editCount = 0;
+    uiStore.isDirty = false;
+    uiStore.saved = true;
+    this.cacheVersion++;
+  }
+
+  clearEditHistory(): void {
+    this._editHistory = [];
+    this.editCount = 0;
   }
 
   updateSchema(schema: ColumnSchema[]): void {

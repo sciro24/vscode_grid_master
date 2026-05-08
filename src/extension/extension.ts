@@ -9,6 +9,8 @@ const FILE_ASSOCIATIONS: Record<string, string> = {
   '*.parq':    VIEW_TYPES.PARQUET,
   '*.arrow':   VIEW_TYPES.ARROW,
   '*.feather': VIEW_TYPES.ARROW,
+  '*.jsonl':   VIEW_TYPES.JSON,
+  '*.ndjson':  VIEW_TYPES.JSON,
 };
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -16,6 +18,7 @@ export function activate(context: vscode.ExtensionContext): void {
     GridEditorProvider.register(context, VIEW_TYPES.CSV),
     GridEditorProvider.register(context, VIEW_TYPES.PARQUET),
     GridEditorProvider.register(context, VIEW_TYPES.ARROW),
+    GridEditorProvider.register(context, VIEW_TYPES.JSON),
   );
 
   context.subscriptions.push(
@@ -37,6 +40,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const viewType =
         ext === 'parquet' || ext === 'parq' ? VIEW_TYPES.PARQUET :
         ext === 'arrow'   || ext === 'feather' ? VIEW_TYPES.ARROW :
+        ext === 'json'    || ext === 'jsonl' || ext === 'ndjson' ? VIEW_TYPES.JSON :
         VIEW_TYPES.CSV;
       await vscode.commands.executeCommand('vscode.openWith', target, viewType);
     }),
@@ -51,7 +55,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const listener = vscode.window.onDidChangeActiveTextEditor(async editor => {
       if (!editor) return;
       const ext = editor.document.uri.path.split('.').pop()?.toLowerCase() ?? '';
-      if (!['csv', 'tsv', 'parquet', 'parq', 'arrow', 'feather'].includes(ext)) return;
+      if (!['csv', 'tsv', 'parquet', 'parq', 'arrow', 'feather', 'jsonl', 'ndjson'].includes(ext)) return;
 
       listener.dispose();
       await context.globalState.update(PROMPT_KEY, true);

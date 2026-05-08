@@ -6,7 +6,12 @@ import { gridStore } from '../stores/grid.svelte.js';
 import { uiStore } from '../stores/ui.svelte.js';
 
 type RawCsvMessage    = { type: '__RAW_CSV__';    payload: { text: string; totalBytes: number } };
-type RawBinaryMessage = { type: '__RAW_BINARY__'; payload: { base64: string; fileType: 'parquet' | 'arrow' } };
+type DuckBundles = {
+  mvp: { mainModule: string; mainWorker: string };
+  eh:  { mainModule: string; mainWorker: string };
+  coi?: { mainModule: string; mainWorker: string; pthreadWorker: string };
+};
+type RawBinaryMessage = { type: '__RAW_BINARY__'; payload: { base64: string; fileType: 'parquet' | 'arrow' | 'json'; jsonFormat?: 'json' | 'ndjson'; duckBundles: DuckBundles } };
 type ExportPathMessage = { type: '__EXPORT_PATH__'; payload: { fsPath: string } };
 type AnyMessage = HostMessage | RawCsvMessage | RawBinaryMessage | ExportPathMessage;
 
@@ -57,7 +62,7 @@ export function setupMessageHandler(): () => void {
         const buf = new ArrayBuffer(binary.length);
         const view = new Uint8Array(buf);
         for (let i = 0; i < binary.length; i++) view[i] = binary.charCodeAt(i);
-        gridStore.loadRawBinary(buf, msg.payload.fileType);
+        gridStore.loadRawBinary(buf, msg.payload.fileType, msg.payload.duckBundles, msg.payload.jsonFormat);
         break;
       }
 

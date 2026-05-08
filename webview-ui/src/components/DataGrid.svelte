@@ -46,8 +46,13 @@
     if (v === null || v === undefined) return '';
     if (typeof v === 'number') {
       if (!isFinite(v)) return String(v);
-      if (Number.isInteger(v)) return v.toLocaleString();
-      return v.toLocaleString(undefined, { maximumFractionDigits: 6 });
+      // Integers: render as-is (no thousand separator) — locale grouping turns
+      // 2024 into "2.024" in it-IT, which corrupts year columns and IDs.
+      // Data grids should display the raw value.
+      if (Number.isInteger(v)) return String(v);
+      // Floats: trim to 6 decimals but keep '.' as decimal separator (en-US),
+      // so we don't surprise users by swapping '.' for ',' in numeric columns.
+      return v.toLocaleString('en-US', { maximumFractionDigits: 6, useGrouping: false });
     }
     if (typeof v === 'boolean') return v ? 'true' : 'false';
     return String(v);
