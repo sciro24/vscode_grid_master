@@ -7,10 +7,11 @@ import { uiStore } from '../stores/ui.svelte.js';
 
 type RawCsvMessage    = { type: '__RAW_CSV__';    payload: { text: string; totalBytes: number } };
 type DuckBundles = {
-  mvp: { mainModule: string; mainWorker: string };
-  eh:  { mainModule: string; mainWorker: string };
-  coi?: { mainModule: string; mainWorker: string; pthreadWorker: string };
+  eh: { mainWorkerB64: string; mainModuleB64: string };
+  extensions: { parquetB64: string; jsonB64: string };
+  parquetWasmB64?: string;
 };
+
 type RawBinaryMessage = { type: '__RAW_BINARY__'; payload: { base64: string; fileType: 'parquet' | 'arrow' | 'json'; jsonFormat?: 'json' | 'ndjson'; duckBundles: DuckBundles } };
 type ExportPathMessage = { type: '__EXPORT_PATH__'; payload: { fsPath: string } };
 type AnyMessage = HostMessage | RawCsvMessage | RawBinaryMessage | ExportPathMessage;
@@ -58,6 +59,7 @@ export function setupMessageHandler(): () => void {
         break;
 
       case '__RAW_BINARY__': {
+        console.log('[GM] __RAW_BINARY__', msg.payload.fileType, 'base64 len', msg.payload.base64?.length, 'bundles', JSON.stringify(msg.payload.duckBundles));
         const binary = atob(msg.payload.base64);
         const buf = new ArrayBuffer(binary.length);
         const view = new Uint8Array(buf);

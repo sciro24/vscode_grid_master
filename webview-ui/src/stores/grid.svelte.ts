@@ -82,29 +82,32 @@ class GridStore {
     this._duckWorker.onmessage = (e: MessageEvent<DuckDbWorkerOut>) => this._handleDuckWorkerMsg(e.data);
   }
 
-  private _ensureDuckWorker(): boolean {
-    if (this.fileType === 'csv') {
-      // CSV never uses DuckDB. Calling this for CSV is a logic bug — bail out.
-      return false;
-    }
-    if (this._duckWorker) return true;
+  private _workerReady: Promise<Worker> | null = null;
+
+  private _getOrCreateWorker(): Promise<Worker> {
+    if (this._workerReady) return this._workerReady;
     const url = (globalThis as Record<string, unknown>)['__DUCK_WORKER_URL__'] as string | undefined;
-    if (!url) { uiStore.setError('DuckDB worker URL not set'); return false; }
-    try {
-      // Module worker — the bundled duckdb.worker.js is an ES module that
-      // imports DuckDB internals. We wrap the (cross-origin) webview URL in
-      // a same-origin blob that re-exports it via `import`.
-      const blob = new Blob(
-        [`import ${JSON.stringify(url)};`],
-        { type: 'application/javascript' },
-      );
-      const blobUrl = URL.createObjectURL(blob);
-      this.setDuckWorker(new Worker(blobUrl, { type: 'module' }));
-    } catch (e) {
-      uiStore.setError(`Could not create DuckDB worker: ${String(e)}`);
-      return false;
+    if (!url) {
+      this._workerReady = Promise.reject(new Error('DuckDB worker URL not set'));
+      return this._workerReady;
     }
-    return true;
+    this._workerReady = (async () => {
+      console.log('[GM] fetching worker from', url);
+      const resp = await fetch(url);
+      console.log('[GM] fetch status', resp.status, resp.ok);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status} fetching worker`);
+      const text = await resp.text();
+      console.log('[GM] worker text length', text.length);
+      const blob = new Blob([text], { type: 'application/javascript' });
+      const blobUrl = URL.createObjectURL(blob);
+      console.log('[GM] creating classic Worker from blob');
+      const worker = new Worker(blobUrl);
+      worker.onerror = (e) => console.error('[GM] worker onerror', e);
+      this.setDuckWorker(worker);
+      console.log('[GM] worker ready');
+      return worker;
+    })();
+    return this._workerReady;
   }
 
   // Called by inline CSV parser in messageHandler.ts
@@ -151,9 +154,12 @@ class GridStore {
     jsonFormat?: 'json' | 'ndjson',
   ): void {
     this.fileType = fileType;
-    if (!this._ensureDuckWorker()) return;
-    const msg: DuckDbWorkerIn = { type: 'LOAD', payload: { buffer, fileType, jsonFormat, bundles: duckBundles } };
-    this._duckWorker!.postMessage(msg, [buffer]);
+    console.log('[GM] loadRawBinary', fileType, 'bundles=', duckBundles);
+    this._getOrCreateWorker().then(worker => {
+      console.log('[GM] sending LOAD to worker');
+      const msg: DuckDbWorkerIn = { type: 'LOAD', payload: { buffer, fileType, jsonFormat, bundles: duckBundles } };
+      worker.postMessage(msg, [buffer]);
+    }).catch(e => uiStore.setError(String(e)));
   }
 
   // ── Data Access ───────────────────────────────────────────────────────────
@@ -373,20 +379,22 @@ class GridStore {
       return;
     }
 
-    if (!this._ensureDuckWorker()) return;
-    const requestId = `chunk-${startRow}-${Date.now()}`;
-    const effectiveEndRow = Math.min(endRow, this.totalRows > 0 ? this.totalRows : endRow);
-    const msg: DuckDbWorkerIn = {
-      type: 'GET_CHUNK',
-      payload: {
-        requestId,
-        startRow,
-        endRow: effectiveEndRow,
-        filters: this.filters.length > 0 ? this.filters : undefined,
-        sort: this.sort ?? undefined,
-      },
-    };
-    this._duckWorker!.postMessage(msg);
+    // Worker may still be initialising — queue via the ready promise.
+    this._getOrCreateWorker().then(worker => {
+      const requestId = `chunk-${startRow}-${Date.now()}`;
+      const effectiveEndRow = Math.min(endRow, this.totalRows > 0 ? this.totalRows : endRow);
+      const msg: DuckDbWorkerIn = {
+        type: 'GET_CHUNK',
+        payload: {
+          requestId,
+          startRow,
+          endRow: effectiveEndRow,
+          filters: this.filters.length > 0 ? this.filters : undefined,
+          sort: this.sort ?? undefined,
+        },
+      };
+      worker.postMessage(msg);
+    }).catch(e => uiStore.setError(String(e)));
   }
 
   private _serveCsvChunk(startRow: number, endRow: number): void {

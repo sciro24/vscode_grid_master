@@ -1,17 +1,19 @@
-// DuckDB-WASM Web Worker
-// DuckDB is bundled into this worker by Vite. The runtime asset URLs (wasm +
-// inner worker) are provided by the host as same-origin webview URIs so the
-// CSP doesn't have to allow jsdelivr.
+// Data worker — reads Parquet, Arrow and JSON files using parquet-wasm +
+// apache-arrow. No external network calls, no DuckDB extension issues.
 
-import * as duckdb from '@duckdb/duckdb-wasm';
-
+import * as arrow from 'apache-arrow';
+import init, { readParquet } from 'parquet-wasm/esm/parquet_wasm.js';
 import type { CellValue, ColumnSchema, FilterSpec, SortSpec, InferredType } from '@shared/schema.js';
 import { CHUNK_SIZE } from '@shared/constants.js';
 
+let _parquetInited = false;
+
+// DuckDbBundleSet is still referenced by the host/store for type-compat but
+// the worker no longer uses DuckDB. Keep the type to avoid a bigger refactor.
 export type DuckDbBundleSet = {
-  mvp: { mainModule: string; mainWorker: string };
-  eh:  { mainModule: string; mainWorker: string };
-  coi?: { mainModule: string; mainWorker: string; pthreadWorker: string };
+  eh: { mainWorkerB64: string; mainModuleB64: string };
+  extensions: { parquetB64: string; jsonB64: string };
+  parquetWasmB64?: string;
 };
 
 export type DuckDbWorkerIn =
@@ -25,28 +27,26 @@ export type DuckDbWorkerOut =
   | { type: 'QUERY_RESULT'; payload: { requestId: string; rows: CellValue[][]; columns: string[] } }
   | { type: 'ERROR'; payload: { message: string } };
 
-// ── Runtime-only DuckDB types (not imported at module level) ──────────────────
+// ── In-memory table ───────────────────────────────────────────────────────────
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type DuckDBConn = any;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type DuckDB = any;
-
-let _db: DuckDB | null = null;
-let _conn: DuckDBConn | null = null;
-let _colNames: string[] = [];
+let _allRows: CellValue[][] = [];
+let _schema: ColumnSchema[] = [];
 
 // ── Message dispatch ──────────────────────────────────────────────────────────
 
+console.log('[GM worker] script loaded (parquet-wasm mode)');
+
 self.onmessage = async (e: MessageEvent<DuckDbWorkerIn>) => {
   const msg = e.data;
+  console.log('[GM worker] received message', msg.type);
   try {
     switch (msg.type) {
-      case 'LOAD':   await handleLoad(msg.payload.buffer, msg.payload.fileType, msg.payload.bundles, msg.payload.jsonFormat); break;
-      case 'GET_CHUNK': await handleGetChunk(msg.payload); break;
-      case 'QUERY':  await handleQuery(msg.payload); break;
+      case 'LOAD':      await handleLoad(msg.payload.buffer, msg.payload.fileType, msg.payload.bundles, msg.payload.jsonFormat); break;
+      case 'GET_CHUNK': handleGetChunk(msg.payload); break;
+      case 'QUERY':     break; // not implemented in this backend
     }
   } catch (err) {
+    console.error('[GM worker] error in', msg.type, err);
     post({ type: 'ERROR', payload: { message: String(err) } });
   }
 };
@@ -54,148 +54,142 @@ self.onmessage = async (e: MessageEvent<DuckDbWorkerIn>) => {
 // ── Load ──────────────────────────────────────────────────────────────────────
 
 async function handleLoad(buffer: ArrayBuffer, fileType: 'parquet' | 'arrow' | 'json', bundles: DuckDbBundleSet, jsonFormat: 'json' | 'ndjson' = 'json'): Promise<void> {
-  const bundle = await duckdb.selectBundle(bundles);
+  console.log('[GM worker] handleLoad', fileType, buffer.byteLength, 'bytes');
 
-  // The selected mainWorker URL is a webview URI (vscode-cdn.net), which is
-  // cross-origin to the worker — so we wrap it in a same-origin blob via
-  // importScripts to keep the browser happy.
-  const workerUrl = URL.createObjectURL(
-    new Blob([`importScripts("${bundle.mainWorker}");`], { type: 'application/javascript' }),
-  );
-  const innerWorker = new Worker(workerUrl);
-  const logger = new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING);
+  let table: arrow.Table;
 
-  _db = new duckdb.AsyncDuckDB(logger, innerWorker);
-  await _db.instantiate(bundle.mainModule, bundle.pthreadWorker);
-  _conn = await _db.connect();
-
-  const extByType: Record<string, string> = { parquet: 'parquet', arrow: 'arrow', json: jsonFormat === 'ndjson' ? 'ndjson' : 'json' };
-  const ext = extByType[fileType];
-  const fileName = `file.${ext}`;
-  await _db.registerFileBuffer(fileName, new Uint8Array(buffer));
-
-  let viewSql: string;
   if (fileType === 'parquet') {
-    viewSql = `CREATE VIEW data AS SELECT * FROM read_parquet('${fileName}')`;
+    if (!_parquetInited) {
+      console.log('[GM worker] initialising parquet-wasm');
+      // Vite has inlined the wasm as a data: URL in init(). Calling with no
+      // args triggers fetch(dataUri) which is same-origin / allowed.
+      // If that fails (e.g. CSP blocks data: in connect-src), fall back to
+      // the base64 bytes shipped by the host.
+      try {
+        await init();
+      } catch (e) {
+        console.warn('[GM worker] init() failed, falling back to b64:', e);
+        const b64 = bundles.parquetWasmB64;
+        if (!b64) throw new Error('parquet-wasm bytes not provided');
+        const bin = atob(b64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        await init(bytes);
+      }
+      _parquetInited = true;
+      console.log('[GM worker] parquet-wasm initialised');
+    }
+    const arrowIpc = readParquet(new Uint8Array(buffer));
+    table = arrow.tableFromIPC(arrowIpc);
   } else if (fileType === 'arrow') {
-    viewSql = `CREATE VIEW data AS SELECT * FROM read_arrow('${fileName}')`;
+    table = arrow.tableFromIPC(new Uint8Array(buffer));
   } else {
-    // JSON: use ndjson format hint when applicable. read_json_auto handles both
-    // arrays-of-objects and ndjson with `format='auto'`.
-    const fmt = jsonFormat === 'ndjson' ? 'newline_delimited' : 'auto';
-    viewSql = `CREATE VIEW data AS SELECT * FROM read_json_auto('${fileName}', format='${fmt}')`;
+    // JSON / NDJSON — parse inline
+    const text = new TextDecoder().decode(buffer);
+    const rawRows: Record<string, unknown>[] = jsonFormat === 'ndjson'
+      ? text.trim().split('\n').filter(Boolean).map(l => JSON.parse(l))
+      : JSON.parse(text);
+    table = arrow.tableFromJSON(rawRows);
   }
-  await _conn.query(viewSql);
 
-  const schemaRes = await _conn.query(`DESCRIBE data`);
-  const countRes  = await _conn.query(`SELECT COUNT(*) as n FROM data`);
+  console.log('[GM worker] table loaded, rows:', table.numRows, 'cols:', table.numCols);
 
-  const schemaRows = schemaRes.toArray() as Record<string, unknown>[];
-  _colNames = schemaRows.map(r => String(r['column_name']));
-
-  const schema: ColumnSchema[] = schemaRows.map((r, index) => ({
-    name:         String(r['column_name']),
+  // Build schema from Arrow schema
+  _schema = table.schema.fields.map((f, index) => ({
+    name: f.name,
     index,
-    inferredType: duckTypeToInferred(String(r['column_type'])),
-    nullable:     String(r['null']) === 'YES',
+    inferredType: arrowTypeToInferred(f.type),
+    nullable: f.nullable,
   }));
 
-  const totalRows = Number((countRes.toArray()[0] as Record<string, unknown>)['n']);
-  post({ type: 'READY', payload: { schema, totalRows } });
+  // Materialise all rows into CellValue[][] for fast in-worker sort/filter
+  _allRows = [];
+  const colNames = _schema.map(c => c.name);
+  for (let r = 0; r < table.numRows; r++) {
+    const row: CellValue[] = colNames.map(name => {
+      const v = table.getChild(name)?.get(r);
+      return coerceArrowValue(v);
+    });
+    _allRows.push(row);
+  }
+
+  post({ type: 'READY', payload: { schema: _schema, totalRows: _allRows.length } });
+}
+
+function coerceArrowValue(v: unknown): CellValue {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'bigint') return Number(v);
+  if (v instanceof Date) return v.toISOString();
+  if (typeof v === 'object') return JSON.stringify(v);
+  return v as CellValue;
+}
+
+function arrowTypeToInferred(type: arrow.DataType): InferredType {
+  if (arrow.DataType.isInt(type) || arrow.DataType.isFloat(type) || arrow.DataType.isDecimal(type)) return 'number';
+  if (arrow.DataType.isBool(type)) return 'boolean';
+  if (arrow.DataType.isDate(type) || arrow.DataType.isTimestamp(type) || arrow.DataType.isTime(type)) return 'date';
+  return 'string';
 }
 
 // ── Get Chunk ─────────────────────────────────────────────────────────────────
 
-async function handleGetChunk(payload: {
+function handleGetChunk(payload: {
   requestId: string;
   startRow: number;
   endRow: number;
   filters?: FilterSpec[];
   sort?: SortSpec;
-}): Promise<void> {
-  if (!_conn) throw new Error('DuckDB not initialized');
-
+}): void {
   const { requestId, startRow, endRow, filters, sort } = payload;
-  const limit = endRow - startRow;
 
-  const whereParts = filters?.map(f => filterToSql(f, _colNames)).filter(Boolean) ?? [];
-  const whereStr   = whereParts.length > 0 ? `WHERE ${whereParts.join(' AND ')}` : '';
-  const orderStr   = sort
-    ? `ORDER BY "${escapeSql(_colNames[sort.colIndex] ?? String(sort.colIndex))}" ${sort.direction.toUpperCase()}`
-    : '';
+  let rows = _allRows;
 
-  const [dataRes, countRes] = await Promise.all([
-    _conn.query(`SELECT * FROM data ${whereStr} ${orderStr} LIMIT ${limit} OFFSET ${startRow}`),
-    _conn.query(`SELECT COUNT(*) as n FROM data ${whereStr}`),
-  ]);
+  if (filters && filters.length > 0) {
+    rows = rows.filter(row => filters.every(f => applyFilter(row, f)));
+  }
 
-  const rows: CellValue[][] = (dataRes.toArray() as Record<string, unknown>[]).map(row =>
-    _colNames.map(col => {
-      const v = row[col];
-      if (v === null || v === undefined) return null;
-      if (typeof v === 'bigint') return Number(v);
-      return v as CellValue;
-    }),
-  );
+  if (sort) {
+    const { colIndex, direction } = sort;
+    rows = [...rows].sort((a, b) => compareValues(a[colIndex], b[colIndex], direction));
+  }
 
-  const filteredTotal = Number((countRes.toArray()[0] as Record<string, unknown>)['n']);
-  post({ type: 'CHUNK', payload: { requestId, rows, startRow, endRow: startRow + rows.length, filteredTotal } });
+  const filteredTotal = rows.length;
+  const sliced = rows.slice(startRow, Math.min(endRow, rows.length));
+
+  post({ type: 'CHUNK', payload: { requestId, rows: sliced, startRow, endRow: startRow + sliced.length, filteredTotal } });
 }
 
-// ── Query ─────────────────────────────────────────────────────────────────────
+// ── Filter / sort helpers ─────────────────────────────────────────────────────
 
-async function handleQuery(payload: { requestId: string; sql: string }): Promise<void> {
-  if (!_conn) throw new Error('DuckDB not initialized');
-
-  const result = await _conn.query(payload.sql);
-  const colNames: string[] = result.schema.fields.map((f: { name: string }) => f.name);
-  const rows: CellValue[][] = (result.toArray() as Record<string, unknown>[]).map(row =>
-    colNames.map(col => {
-      const v = row[col];
-      if (v === null || v === undefined) return null;
-      if (typeof v === 'bigint') return Number(v);
-      return v as CellValue;
-    }),
-  );
-
-  post({ type: 'QUERY_RESULT', payload: { requestId: payload.requestId, rows, columns: colNames } });
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function duckTypeToInferred(duckType: string): InferredType {
-  const t = duckType.toUpperCase();
-  if (/INT|FLOAT|DOUBLE|DECIMAL|NUMERIC|HUGEINT|UBIGINT/.test(t)) return 'number';
-  if (/BOOL/.test(t)) return 'boolean';
-  if (/DATE|TIME|TIMESTAMP/.test(t)) return 'date';
-  return 'string';
-}
-
-function filterToSql(f: FilterSpec, colNames: string[]): string {
-  const colName = colNames[f.colIndex] ?? `col${f.colIndex}`;
-  const col = `"${escapeSql(colName)}"`;
-  const val = typeof f.value === 'string'
-    ? `'${escapeSqlStr(f.value)}'`
-    : String(f.value);
-
+function applyFilter(row: CellValue[], f: FilterSpec): boolean {
+  const cell = row[f.colIndex];
+  const val = f.value;
   switch (f.op) {
-    case 'eq':           return `${col} = ${val}`;
-    case 'neq':          return `${col} != ${val}`;
-    case 'contains':     return `${col}::VARCHAR ILIKE '%${escapeSqlStr(String(f.value))}%'`;
-    case 'not_contains': return `${col}::VARCHAR NOT ILIKE '%${escapeSqlStr(String(f.value))}%'`;
-    case 'gt':           return `${col} > ${val}`;
-    case 'lt':           return `${col} < ${val}`;
-    case 'gte':          return `${col} >= ${val}`;
-    case 'lte':          return `${col} <= ${val}`;
-    case 'regex':        return `regexp_matches(${col}::VARCHAR, '${escapeSqlStr(String(f.value))}')`;
-    case 'is_null':      return `${col} IS NULL`;
-    case 'is_not_null':  return `${col} IS NOT NULL`;
-    default:             return '';
+    case 'eq':           return cell == val;
+    case 'neq':          return cell != val;
+    case 'contains':     return String(cell ?? '').toLowerCase().includes(String(val).toLowerCase());
+    case 'not_contains': return !String(cell ?? '').toLowerCase().includes(String(val).toLowerCase());
+    case 'gt':           return Number(cell) > Number(val);
+    case 'lt':           return Number(cell) < Number(val);
+    case 'gte':          return Number(cell) >= Number(val);
+    case 'lte':          return Number(cell) <= Number(val);
+    case 'regex':        try { return new RegExp(String(val), 'i').test(String(cell ?? '')); } catch { return false; }
+    case 'is_null':      return cell === null;
+    case 'is_not_null':  return cell !== null;
+    default:             return true;
   }
 }
 
-function escapeSql(s: string): string    { return s.replace(/"/g, '""'); }
-function escapeSqlStr(s: string): string { return s.replace(/'/g, "''"); }
+function compareValues(a: CellValue, b: CellValue, dir: 'asc' | 'desc'): number {
+  const aNum = Number(a), bNum = Number(b);
+  let cmp: number;
+  if (!isNaN(aNum) && !isNaN(bNum)) {
+    cmp = aNum - bNum;
+  } else {
+    cmp = String(a ?? '').localeCompare(String(b ?? ''));
+  }
+  return dir === 'asc' ? cmp : -cmp;
+}
 
 function post(msg: DuckDbWorkerOut): void {
   (self as unknown as { postMessage: (m: unknown) => void }).postMessage(msg);

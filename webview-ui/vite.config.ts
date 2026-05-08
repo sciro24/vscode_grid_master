@@ -1,21 +1,24 @@
 import { defineConfig, type Plugin } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
+import wasm from 'vite-plugin-wasm';
+import topLevelAwait from 'vite-plugin-top-level-await';
 import path from 'path';
-import { promises as fs } from 'fs';
+import { promises as fs, createWriteStream } from 'fs';
+import https from 'https';
 
-// Copy DuckDB-WASM runtime assets (wasm + inner workers) into the webview
-// dist so they can be loaded from the same origin as the webview. Loading
-// them from jsdelivr is blocked by the webview CSP.
+// Copy DuckDB-WASM runtime assets into dist so the extension host can read
+// them at startup and pass them to the webview as base64.
+// Extensions are downloaded from extensions.duckdb.org at build time so the
+// vsix ships everything needed offline.
 function copyDuckDbAssets(): Plugin {
-  // We ship MVP + EH only. COI requires cross-origin isolation
-  // (Cross-Origin-Opener-Policy headers) which VS Code webviews don't set,
-  // so it would never be selected anyway.
-  const FILES = [
-    'duckdb-mvp.wasm',
-    'duckdb-eh.wasm',
-    'duckdb-browser-mvp.worker.js',
-    'duckdb-browser-eh.worker.js',
+  // Copy parquet-wasm runtime into dist so the host can read it and pass it
+  // as base64 to the webview worker.
+  const FROM_NPM: { src: string; dst: string }[] = [
+    { src: 'parquet-wasm/esm/parquet_wasm_bg.wasm', dst: 'parquet_wasm_bg.wasm' },
   ];
+  const EXT_BASE = '';
+  const EXTENSIONS: string[] = [];
+
   return {
     name: 'copy-duckdb-assets',
     apply: 'build',
@@ -23,11 +26,39 @@ function copyDuckDbAssets(): Plugin {
       const src = path.resolve(__dirname, 'node_modules/@duckdb/duckdb-wasm/dist');
       const dst = path.resolve(__dirname, 'dist');
       await fs.mkdir(dst, { recursive: true });
-      for (const f of FILES) {
+
+      for (const entry of FROM_NPM) {
+        const srcPath = path.resolve(__dirname, 'node_modules', entry.src);
+        const dstPath = path.join(dst, entry.dst);
         try {
-          await fs.copyFile(path.join(src, f), path.join(dst, f));
+          await fs.copyFile(srcPath, dstPath);
+          const stat = await fs.stat(dstPath);
+          console.log(`[copy-duckdb-assets] copied ${entry.dst} (${stat.size} bytes)`);
         } catch (e) {
-          console.warn(`[copy-duckdb-assets] could not copy ${f}:`, e);
+          console.warn(`[copy-duckdb-assets] could not copy ${entry.dst}:`, e);
+        }
+      }
+
+      for (const f of EXTENSIONS) {
+        const dstPath = path.join(dst, f);
+        // Skip download if file already present and non-empty.
+        try {
+          const stat = await fs.stat(dstPath);
+          if (stat.size > 0) continue;
+        } catch { /* not present, download */ }
+
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const file = createWriteStream(dstPath);
+            https.get(`${EXT_BASE}/${f}`, (res) => {
+              res.pipe(file);
+              file.on('finish', () => { file.close(); resolve(); });
+            }).on('error', (e) => { fs.unlink(dstPath).catch(() => {}); reject(e); });
+          });
+          const stat = await fs.stat(dstPath);
+          console.log(`[copy-duckdb-assets] downloaded ${f} (${stat.size} bytes)`);
+        } catch (e) {
+          console.warn(`[copy-duckdb-assets] failed to download ${f}:`, e);
         }
       }
     },
@@ -52,11 +83,12 @@ export default defineConfig(() => {
         emptyOutDir: false,
         lib: {
           entry: path.resolve(__dirname, 'src/workers/duckdb.worker.ts'),
-          formats: ['es'],
+          // IIFE — classic worker, loaded via blob+importScripts pattern.
+          formats: ['iife'],
+          name: 'GridMasterWorker',
           fileName: () => 'duckdb.worker.js',
         },
         rollupOptions: {
-          // Inline everything — no external deps, no shared chunks.
           output: {
             inlineDynamicImports: true,
           },

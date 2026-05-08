@@ -198,18 +198,23 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
         panel.webview.asWebviewUri(
           vscode.Uri.joinPath(this._context.extensionUri, 'webview-ui', 'dist', file),
         ).toString();
-      // We don't ship COI — it requires cross-origin isolation that VS Code
-      // webviews don't provide. selectBundle picks EH on modern browsers and
-      // falls back to MVP otherwise.
+
+      // Read parquet-wasm runtime bytes once and pass to the worker as base64.
+      const readDistB64 = async (file: string): Promise<string> => {
+        try {
+          const uri = vscode.Uri.joinPath(this._context.extensionUri, 'webview-ui', 'dist', file);
+          const bytes = await vscode.workspace.fs.readFile(uri);
+          return Buffer.from(bytes).toString('base64');
+        } catch {
+          return '';
+        }
+      };
+      const parquetWasmB64 = await readDistB64('parquet_wasm_bg.wasm');
+
       const duckBundles = {
-        mvp: {
-          mainModule: duckAsset('duckdb-mvp.wasm'),
-          mainWorker: duckAsset('duckdb-browser-mvp.worker.js'),
-        },
-        eh: {
-          mainModule: duckAsset('duckdb-eh.wasm'),
-          mainWorker: duckAsset('duckdb-browser-eh.worker.js'),
-        },
+        eh: { mainWorkerB64: '', mainModuleB64: '' },
+        extensions: { parquetB64: '', jsonB64: '' },
+        parquetWasmB64,
       };
 
       if (document.fileType === 'csv') {
