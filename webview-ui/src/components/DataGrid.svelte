@@ -6,6 +6,7 @@
   const ROW_HEIGHT = 26;
   const HEADER_HEIGHT = 32;
   const OVERSCAN = 8;
+  const MIN_COL_WIDTH = 40;
 
   let scrollerEl: HTMLDivElement;
   let scrollTop = $state(0);
@@ -14,21 +15,18 @@
   const totalRows = $derived(gridStore.filteredRows);
   const totalHeight = $derived(totalRows * ROW_HEIGHT);
   // Read cacheVersion so cell reads in the template re-evaluate when the cache mutates.
-  // Without this Svelte can't track invalidations through the plain Map in gridStore._cache.
   const cacheTick = $derived(gridStore.cacheVersion);
 
   const startRow = $derived(Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN));
   const visibleRowCount = $derived(Math.ceil(viewportHeight / ROW_HEIGHT) + OVERSCAN * 2);
   const endRow = $derived(Math.min(totalRows, startRow + visibleRowCount));
 
-  // Update gridStore viewport so chunks get prefetched
   $effect(() => {
     gridStore.updateViewport(startRow, endRow);
   });
 
   function onScroll(e: Event) {
-    const t = e.target as HTMLDivElement;
-    scrollTop = t.scrollTop;
+    scrollTop = (e.target as HTMLDivElement).scrollTop;
   }
 
   function onResize() {
@@ -59,7 +57,34 @@
     return v === null || v === undefined;
   }
 
-  // Editing state
+  // ── Column resize ─────────────────────────────────────────────────────────
+
+  let resizing = $state<{ colName: string; startX: number; startW: number } | null>(null);
+
+  function startResize(e: MouseEvent, colName: string, colType: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    const startW = colWidth(colName, colType);
+    resizing = { colName, startX: e.clientX, startW };
+
+    function onMove(ev: MouseEvent) {
+      if (!resizing) return;
+      const w = Math.max(MIN_COL_WIDTH, resizing.startW + ev.clientX - resizing.startX);
+      gridStore.setColumnWidth(resizing.colName, w);
+    }
+
+    function onUp() {
+      resizing = null;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    }
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }
+
+  // ── Editing ───────────────────────────────────────────────────────────────
+
   let editingCell = $state<{ row: number; col: number } | null>(null);
   let editValue = $state('');
 
@@ -85,14 +110,14 @@
     editingCell = null;
   }
 
-  function cancelEdit() {
-    editingCell = null;
-  }
+  function cancelEdit() { editingCell = null; }
 
   function onCellKey(e: KeyboardEvent) {
     if (e.key === 'Enter') { e.preventDefault(); commitEdit(); }
     else if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
   }
+
+  // ── Column widths ─────────────────────────────────────────────────────────
 
   function colWidth(name: string, type: string): number {
     const stored = gridStore.colWidths.get(name);
@@ -106,6 +131,8 @@
       default:        return 160;
     }
   }
+
+  // ── Sort ──────────────────────────────────────────────────────────────────
 
   function toggleSort(colIdx: number) {
     const cur = gridStore.sort;
@@ -121,9 +148,17 @@
     if (!s || s.colIndex !== colIdx) return '';
     return s.direction === 'asc' ? ' ↑' : ' ↓';
   }
+
+  // ── Column colors ─────────────────────────────────────────────────────────
+
+  // Accessed via gridStore.colColors (set by Toolbar)
+  function colBgStyle(colIndex: number): string {
+    const color = gridStore.colColors.get(colIndex);
+    return color ? `background-color: ${color};` : '';
+  }
 </script>
 
-<div class="grid-root">
+<div class="grid-root" class:is-resizing={resizing !== null}>
   <div class="grid-scroller" bind:this={scrollerEl} onscroll={onScroll}>
     <div class="grid-sizer" style="height: {totalHeight + HEADER_HEIGHT}px;">
 
@@ -131,15 +166,26 @@
       <div class="grid-header" style="height: {HEADER_HEIGHT}px;">
         <div class="row-num-cell header-cell">#</div>
         {#each gridStore.visibleSchema as col (col.index)}
-          <button
+          <div
             class="header-cell"
-            style="width: {colWidth(col.name, col.inferredType)}px"
-            onclick={() => toggleSort(col.index)}
-            title="Click to sort"
+            style="width: {colWidth(col.name, col.inferredType)}px; {colBgStyle(col.index)}"
           >
-            <span class="header-name">{col.name}{sortIndicator(col.index)}</span>
-            <span class="header-type">{col.inferredType}</span>
-          </button>
+            <button
+              class="header-btn"
+              onclick={() => toggleSort(col.index)}
+              title="Click to sort"
+            >
+              <span class="header-name">{col.name}{sortIndicator(col.index)}</span>
+              <span class="header-type">{col.inferredType}</span>
+            </button>
+            <!-- Resize handle -->
+            <div
+              class="resize-handle"
+              onmousedown={(e) => startResize(e, col.name, col.inferredType)}
+              role="separator"
+              aria-label="Resize column"
+            ></div>
+          </div>
         {/each}
       </div>
 
@@ -165,7 +211,7 @@
                   class="cell"
                   class:cell-null={isNull(val)}
                   class:cell-number={col.inferredType === 'number'}
-                  style="width: {colWidth(col.name, col.inferredType)}px"
+                  style="width: {colWidth(col.name, col.inferredType)}px; {colBgStyle(col.index)}"
                   ondblclick={() => startEdit(row, col.index)}
                   role="button"
                   tabindex="-1"
@@ -193,6 +239,12 @@
     font-size: 12px;
   }
 
+  /* Prevent text selection while resizing */
+  .grid-root.is-resizing {
+    user-select: none;
+    cursor: col-resize;
+  }
+
   .grid-scroller {
     width: 100%;
     height: 100%;
@@ -216,26 +268,34 @@
   }
 
   .header-cell {
+    position: relative;
+    display: flex;
+    align-items: stretch;
+    border-right: 1px solid var(--gm-border, var(--vscode-panel-border));
+    overflow: visible;
+    flex-shrink: 0;
+  }
+
+  .header-btn {
     display: flex;
     flex-direction: column;
     justify-content: center;
     padding: 4px 8px;
-    border-right: 1px solid var(--gm-border, var(--vscode-panel-border));
+    flex: 1;
+    min-width: 0;
     font-weight: 600;
     font-size: 11px;
     color: var(--gm-header-fg, var(--vscode-editor-foreground));
     text-align: left;
     cursor: pointer;
     background: transparent;
-    border-top: none;
-    border-left: none;
-    border-bottom: none;
+    border: none;
     overflow: hidden;
     white-space: nowrap;
     user-select: none;
   }
 
-  .header-cell:hover {
+  .header-btn:hover {
     background: var(--vscode-list-hoverBackground);
   }
 
@@ -251,6 +311,23 @@
     font-weight: 400;
   }
 
+  /* Resize handle — 6px wide strip on the right edge of the header cell */
+  .resize-handle {
+    position: absolute;
+    right: -3px;
+    top: 0;
+    width: 6px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 3;
+  }
+
+  .resize-handle:hover,
+  .resize-handle:active {
+    background: var(--vscode-focusBorder);
+    opacity: 0.7;
+  }
+
   .grid-rows {
     position: absolute;
     left: 0;
@@ -264,8 +341,8 @@
     border-bottom: 1px solid var(--gm-border, var(--vscode-panel-border));
   }
 
-  .grid-row:hover {
-    background: var(--vscode-list-hoverBackground);
+  .grid-row:hover > .cell {
+    filter: brightness(0.95);
   }
 
   .row-num-cell {
@@ -286,6 +363,7 @@
     padding: 0 8px;
     display: flex;
     align-items: center;
+    flex-shrink: 0;
     border-right: 1px solid var(--gm-border, var(--vscode-panel-border));
     overflow: hidden;
     white-space: nowrap;
@@ -306,6 +384,7 @@
 
   .cell-input {
     padding: 0 8px;
+    flex-shrink: 0;
     border: 2px solid var(--vscode-focusBorder);
     background: var(--vscode-input-background);
     color: var(--vscode-input-foreground);

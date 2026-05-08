@@ -51,6 +51,9 @@ class GridStore {
   private _duckWorker: Worker | null = null;
   private _pendingRequests = new Map<string, (rows: CellValue[][]) => void>();
 
+  // Column colors: colIndex → CSS color string
+  colColors = $state<Map<number, string>>(new Map());
+
   // Sidecar
   sidecar = $state<SidecarData | null>(null);
 
@@ -224,6 +227,37 @@ class GridStore {
 
   setColumnWidth(colName: string, width: number): void {
     this.colWidths = new Map(this.colWidths).set(colName, width);
+  }
+
+  setColColors(colors: Map<number, string>): void {
+    this.colColors = colors;
+  }
+
+  toggleColColors(): void {
+    if (this.colColors.size > 0) {
+      this.colColors = new Map();
+      return;
+    }
+    // Muted pastel palette — good contrast on both light and dark VS Code themes.
+    // Colors use low saturation + high lightness (light) or low lightness (dark);
+    // we pick a single set of semi-transparent tints that work on both.
+    const PALETTE = [
+      'rgba(100, 149, 237, 0.12)', // cornflower blue
+      'rgba(144, 238, 144, 0.12)', // light green
+      'rgba(255, 182, 193, 0.14)', // light pink
+      'rgba(255, 218, 120, 0.13)', // light gold
+      'rgba(175, 238, 238, 0.14)', // pale turquoise
+      'rgba(221, 160, 221, 0.14)', // plum
+      'rgba(255, 160, 122, 0.13)', // light salmon
+      'rgba(152, 251, 152, 0.12)', // pale green
+      'rgba(135, 206, 250, 0.13)', // light sky blue
+      'rgba(240, 230, 140, 0.13)', // khaki
+    ];
+    const next = new Map<number, string>();
+    for (const col of this.schema) {
+      next.set(col.index, PALETTE[col.index % PALETTE.length]);
+    }
+    this.colColors = next;
   }
 
   get visibleSchema(): ColumnSchema[] {

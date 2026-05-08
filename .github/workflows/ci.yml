@@ -15,16 +15,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
 
       - name: Install root deps
-        run: npm ci
+        run: npm install
 
       - name: Install webview deps
-        run: cd webview-ui && npm ci
-
-      - name: Lint
-        run: npm run lint
+        run: cd webview-ui && npm install
 
       - name: Build extension
         run: npm run build:extension

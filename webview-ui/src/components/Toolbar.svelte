@@ -30,6 +30,7 @@
   const hasFilters = $derived(gridStore.filters.length > 0);
   const fileName = $derived(gridStore.fileName);
   const isDirty = $derived(uiStore.isDirty);
+  const colorsActive = $derived(gridStore.colColors.size > 0);
 </script>
 
 <div class="toolbar">
@@ -65,6 +66,18 @@
         Clear filters
       </button>
     {/if}
+
+    <button
+      class="btn btn-ghost"
+      class:btn-active={colorsActive}
+      onclick={() => gridStore.toggleColColors()}
+      title={colorsActive ? 'Remove column colors' : 'Color columns'}
+    >
+      <!-- Palette icon -->
+      <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+        <path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm0 1.5a6.5 6.5 0 0 1 6.5 6.5c0 1.1-.9 2-2 2a2 2 0 0 1-1.41-.59l-.01-.01A2 2 0 0 0 9.5 9a2 2 0 0 0-2 2 .5.5 0 0 1-.5.5A6.5 6.5 0 0 1 1.5 8 6.5 6.5 0 0 1 8 1.5zM5 5a1 1 0 1 0 0 2 1 1 0 0 0 0-2zm6 0a1 1 0 1 0 0 2 1 1 0 0 0 0-2zM6.5 3a1 1 0 1 0 0 2 1 1 0 0 0 0-2zm3 0a1 1 0 1 0 0 2 1 1 0 0 0 0-2z"/>
+      </svg>
+    </button>
 
     <div class="col-panel-wrap">
       <button class="btn btn-ghost" onclick={() => showColumnPanel = !showColumnPanel} title="Show / hide columns">
@@ -230,6 +243,11 @@
 
   .btn-primary:hover {
     background: var(--gm-accent-hover);
+  }
+
+  .btn-active {
+    color: var(--gm-accent, var(--vscode-focusBorder));
+    background: var(--gm-hover-bg, var(--vscode-list-hoverBackground));
   }
 
   .col-panel-wrap {
