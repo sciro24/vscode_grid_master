@@ -34,6 +34,12 @@ export type DuckDbWorkerOut =
 let _allRows: CellValue[][] = [];
 let _schema: ColumnSchema[] = [];
 
+// For large Arrow/Parquet tables we keep the Arrow Table around and
+// materialise rows lazily on GET_CHUNK to avoid blocking the worker for
+// minutes building a 10M-cell array up front.
+let _arrowTable: arrow.Table | null = null;
+const LAZY_THRESHOLD = 100_000;
+
 // ── Message dispatch ──────────────────────────────────────────────────────────
 
 console.log('[GM worker] script loaded (parquet-wasm mode)');
@@ -150,18 +156,59 @@ async function handleLoad(buffer: ArrayBuffer, fileType: 'parquet' | 'arrow' | '
     nullable: f.nullable,
   }));
 
-  // Materialise all rows into CellValue[][] for fast in-worker sort/filter
-  _allRows = [];
-  const colNames = _schema.map(c => c.name);
-  for (let r = 0; r < table.numRows; r++) {
-    const row: CellValue[] = colNames.map(name => {
-      const v = table.getChild(name)?.get(r);
-      return coerceArrowValue(v);
-    });
-    _allRows.push(row);
+  const total = table.numRows;
+  if (total > LAZY_THRESHOLD) {
+    // Lazy mode: keep the Arrow table and materialise rows on demand.
+    // Sorting / filtering still works because GET_CHUNK builds the full
+    // row array the first time it's needed (or when filters/sort change).
+    _arrowTable = table;
+    _allRows = [];
+    console.log('[GM worker] using lazy mode for', total, 'rows');
+    post({ type: 'READY', payload: { schema: _schema, totalRows: total } });
+    return;
   }
 
+  // Eager: materialise all rows for fast in-worker sort/filter
+  _arrowTable = null;
+  _allRows = materialiseArrowTable(table, _schema);
+  console.log('[GM worker] materialised', _allRows.length, 'rows');
   post({ type: 'READY', payload: { schema: _schema, totalRows: _allRows.length } });
+}
+
+// Build CellValue[][] from an Arrow Table using columnar iteration so each
+// column lookup happens once instead of once per row × column.
+function materialiseArrowTable(table: arrow.Table, schema: ColumnSchema[]): CellValue[][] {
+  const numRows = table.numRows;
+  const numCols = schema.length;
+  const rows: CellValue[][] = new Array(numRows);
+  for (let r = 0; r < numRows; r++) rows[r] = new Array(numCols);
+
+  for (let c = 0; c < numCols; c++) {
+    const child = table.getChild(schema[c].name);
+    if (!child) continue;
+    for (let r = 0; r < numRows; r++) {
+      rows[r][c] = coerceArrowValue(child.get(r));
+    }
+  }
+  return rows;
+}
+
+// Materialise just a slice [startRow, endRow) — used for lazy mode to avoid
+// building the entire CellValue[][] up front.
+function materialiseSlice(table: arrow.Table, schema: ColumnSchema[], startRow: number, endRow: number): CellValue[][] {
+  const end = Math.min(endRow, table.numRows);
+  const len = Math.max(0, end - startRow);
+  if (len === 0) return [];
+  const rows: CellValue[][] = new Array(len);
+  for (let i = 0; i < len; i++) rows[i] = new Array(schema.length);
+  for (let c = 0; c < schema.length; c++) {
+    const child = table.getChild(schema[c].name);
+    if (!child) continue;
+    for (let i = 0; i < len; i++) {
+      rows[i][c] = coerceArrowValue(child.get(startRow + i));
+    }
+  }
+  return rows;
 }
 
 async function handleLoadParts(buffers: ArrayBuffer[], fileType: 'parquet' | 'arrow', bundles: DuckDbBundleSet): Promise<void> {
@@ -187,7 +234,10 @@ async function handleLoadParts(buffers: ArrayBuffer[], fileType: 'parquet' | 'ar
 
   _schema = [];
   _allRows = [];
+  _arrowTable = null;
 
+  // Concat all parts into a single Arrow Table — schemas must match across parts.
+  const tables: arrow.Table[] = [];
   for (let i = 0; i < buffers.length; i++) {
     const buf = buffers[i];
     let table: arrow.Table;
@@ -197,29 +247,29 @@ async function handleLoadParts(buffers: ArrayBuffer[], fileType: 'parquet' | 'ar
     } else {
       table = arrow.tableFromIPC(new Uint8Array(buf));
     }
-
-    // Use the schema from the first part; subsequent parts must match
-    if (i === 0) {
-      _schema = table.schema.fields.map((f, index) => ({
-        name: f.name,
-        index,
-        inferredType: arrowTypeToInferred(f.type),
-        nullable: f.nullable,
-      }));
-    }
-
-    const colNames = _schema.map(c => c.name);
-    for (let r = 0; r < table.numRows; r++) {
-      const row: CellValue[] = colNames.map(name => {
-        const v = table.getChild(name)?.get(r);
-        return coerceArrowValue(v);
-      });
-      _allRows.push(row);
-    }
-
-    console.log('[GM worker] part', i + 1, '/', buffers.length, 'loaded,', table.numRows, 'rows, total so far:', _allRows.length);
+    tables.push(table);
+    console.log('[GM worker] part', i + 1, '/', buffers.length, 'loaded,', table.numRows, 'rows');
   }
 
+  const merged = tables.length === 1 ? tables[0] : tables[0].concat(...tables.slice(1));
+  _schema = merged.schema.fields.map((f, index) => ({
+    name: f.name,
+    index,
+    inferredType: arrowTypeToInferred(f.type),
+    nullable: f.nullable,
+  }));
+
+  const total = merged.numRows;
+  if (total > LAZY_THRESHOLD) {
+    _arrowTable = merged;
+    _allRows = [];
+    console.log('[GM worker] using lazy mode for', total, 'rows (parts)');
+    post({ type: 'READY', payload: { schema: _schema, totalRows: total } });
+    return;
+  }
+
+  _allRows = materialiseArrowTable(merged, _schema);
+  console.log('[GM worker] materialised', _allRows.length, 'rows (parts)');
   post({ type: 'READY', payload: { schema: _schema, totalRows: _allRows.length } });
 }
 
@@ -297,20 +347,37 @@ function handleGetChunk(payload: {
   globalSearch?: string;
 }): void {
   const { requestId, startRow, endRow, filters, sort, globalSearch } = payload;
+  const hasFilters = !!(filters && filters.length > 0);
+  const q = globalSearch?.trim().toLowerCase();
+  const hasSearch = !!(q && q.length > 0);
+  const hasSort = !!sort;
+
+  // Fast path: lazy-mode Arrow table, no filter/sort/search → slice directly.
+  if (_arrowTable && !hasFilters && !hasSort && !hasSearch && _allRows.length === 0) {
+    const sliced = materialiseSlice(_arrowTable, _schema, startRow, endRow);
+    const filteredTotal = _arrowTable.numRows;
+    post({ type: 'CHUNK', payload: { requestId, rows: sliced, startRow, endRow: startRow + sliced.length, filteredTotal } });
+    return;
+  }
+
+  // If we need to filter/sort/search a lazy table, materialise once and cache.
+  if (_arrowTable && _allRows.length === 0) {
+    console.log('[GM worker] materialising lazy table for filter/sort/search');
+    _allRows = materialiseArrowTable(_arrowTable, _schema);
+  }
 
   let rows = _allRows;
 
-  if (filters && filters.length > 0) {
-    rows = rows.filter(row => filters.every(f => applyFilter(row, f)));
+  if (hasFilters) {
+    rows = rows.filter(row => filters!.every(f => applyFilter(row, f)));
   }
 
-  const q = globalSearch?.trim().toLowerCase();
-  if (q) {
-    rows = rows.filter(row => row.some(cell => String(cell ?? '').toLowerCase().includes(q)));
+  if (hasSearch) {
+    rows = rows.filter(row => row.some(cell => String(cell ?? '').toLowerCase().includes(q!)));
   }
 
-  if (sort) {
-    const { colIndex, direction } = sort;
+  if (hasSort) {
+    const { colIndex, direction } = sort!;
     rows = [...rows].sort((a, b) => compareValues(a[colIndex], b[colIndex], direction));
   }
 

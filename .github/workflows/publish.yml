@@ -1,5 +1,9 @@
 name: Publish
 
+# Triggered by .github/workflows/release.yml when it pushes a v* tag after
+# auto-bumping the version from Conventional Commits.
+# Can also be triggered manually by pushing a tag (e.g. ./scripts/release.sh).
+
 on:
   push:
     tags:

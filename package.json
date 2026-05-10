@@ -27,7 +27,9 @@
     "viewer"
   ],
   "icon": "assets/icon.png",
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
     "customEditors": [
@@ -160,13 +162,27 @@
         "command": "gridMaster.openWith",
         "title": "Open with Grid Master",
         "category": "Grid Master"
+      },
+      {
+        "command": "gridMaster.openDirectory",
+        "title": "Open with Grid Master",
+        "category": "Grid Master"
+      },
+      {
+        "command": "gridMaster.openPartitionedFolder",
+        "title": "Grid Master: Open Partitioned Dataset Folder…"
       }
     ],
     "menus": {
       "explorer/context": [
         {
           "command": "gridMaster.openWith",
-          "when": "resourceExtname =~ /\\.(csv|tsv|parquet|parq|arrow|feather|json|jsonl|ndjson|xlsx|xlsb|xls|xlsm|avro|db|sqlite|sqlite3|orc)$/i",
+          "when": "!explorerResourceIsFolder && resourceFilename =~ /\\.(csv|tsv|parquet|parq|arrow|feather|json|jsonl|ndjson|xlsx|xlsb|xls|xlsm|avro|db|sqlite|sqlite3|orc)$/i",
+          "group": "navigation@10"
+        },
+        {
+          "command": "gridMaster.openDirectory",
+          "when": "explorerResourceIsFolder && resourceFilename =~ /\\.(parquet|parq|arrow)$/i",
           "group": "navigation@10"
         }
       ],
@@ -219,7 +235,7 @@
     "watch:webview": "cd webview-ui && npm run dev",
     "lint": "eslint src --ext ts",
     "test": "node ./out/test/runTest.js",
-    "package": "vsce package",
+    "package": "vsce package --out release/",
     "publish:vscode": "vsce publish",
     "publish:ovsx": "ovsx publish"
   },

@@ -308,31 +308,29 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
             payload: { base64, fileType: document.fileType, duckBundles },
           });
         } else {
-          // parquet / arrow — check for partitioned directory (Spark-style)
-          const isPartitionedDir = await (async () => {
-            try {
-              const stat = await vscode.workspace.fs.stat(document.uri);
-              return stat.type === vscode.FileType.Directory;
-            } catch {
-              return false;
-            }
-          })();
+          // parquet / arrow — check for partitioned directory (Spark-style).
+          // Use the stat already obtained at the top of _sendInit.
+          const isPartitionedDir = stat.type === vscode.FileType.Directory;
 
           let partFiles: Uint8Array[] = [];
 
           if (isPartitionedDir) {
             send({ type: 'LOADING', payload: { active: true, message: 'Reading partitioned dataset...' } });
             const entries = await vscode.workspace.fs.readDirectory(document.uri);
+
+            // Accept any non-hidden file containing ".parquet" in its name
+            // (covers .snappy.parquet, .zstd.parquet, plain .parquet, etc.)
             const partNames = entries
               .filter(([name, type]) =>
                 type === vscode.FileType.File &&
-                /^part-.*\.parquet$/i.test(name),
+                !name.startsWith('.') &&
+                name.toLowerCase().includes('.parquet'),
               )
               .map(([name]) => name)
               .sort();
 
             if (partNames.length === 0) {
-              send({ type: 'ERROR', payload: { code: 'READ_ERROR', message: 'No part-*.parquet files found in directory.' } });
+              send({ type: 'ERROR', payload: { code: 'READ_ERROR', message: 'No Parquet part files found in this directory.' } });
               return;
             }
 

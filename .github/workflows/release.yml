@@ -1,0 +1,115 @@
+name: Release
+
+# Auto-versioning from Conventional Commits.
+# On push to main:
+#   1. Read commits since the last v* tag
+#   2. Decide the bump:  feat → minor,  fix → patch,  BREAKING CHANGE / "!" → major
+#   3. If anything bumpable was committed: update package.json, commit, tag vX.Y.Z, push.
+# Pushing the tag triggers .github/workflows/publish.yml which publishes to
+# VS Marketplace and Open VSX.
+#
+# Skip rules:
+#   - chore:, docs:, ci:, refactor:, test:, style: alone do NOT trigger a release.
+#   - Commits that contain "[skip release]" are ignored.
+#   - The release commit itself (subject "chore(release): vX.Y.Z") is ignored on the next run
+#     so we don't loop forever.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write   # needed to push the bump commit and the tag
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # Don't run on the release commit we just pushed
+    if: "!startsWith(github.event.head_commit.message, 'chore(release):')"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so we can find the last tag
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Configure git
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Decide bump from Conventional Commits
+        id: bump
+        run: |
+          set -euo pipefail
+
+          # Find the latest v* tag, or fall back to the root commit.
+          LAST_TAG=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo "")
+          if [ -z "$LAST_TAG" ]; then
+            RANGE=$(git rev-list --max-parents=0 HEAD | tail -1)..HEAD
+            echo "No previous v* tag — scanning from root."
+          else
+            RANGE="${LAST_TAG}..HEAD"
+            echo "Scanning commits in ${RANGE}"
+          fi
+
+          # Get commit subjects + bodies in the range.
+          COMMITS=$(git log "$RANGE" --pretty=format:'%s%n%b%n---END---')
+          echo "$COMMITS"
+
+          BUMP=""
+
+          # MAJOR: any commit with "BREAKING CHANGE:" in body, or "type!:" in subject.
+          if echo "$COMMITS" | grep -qE '^[a-zA-Z]+(\([^)]+\))?!:'; then
+            BUMP="major"
+          elif echo "$COMMITS" | grep -q 'BREAKING CHANGE:'; then
+            BUMP="major"
+          # MINOR: any commit starting with "feat:" or "feat(scope):"
+          elif echo "$COMMITS" | grep -qE '^feat(\([^)]+\))?:'; then
+            BUMP="minor"
+          # PATCH: any commit starting with "fix:" or "perf:"
+          elif echo "$COMMITS" | grep -qE '^(fix|perf)(\([^)]+\))?:'; then
+            BUMP="patch"
+          fi
+
+          # Honour explicit skip directive
+          if echo "$COMMITS" | grep -q '\[skip release\]'; then
+            BUMP=""
+          fi
+
+          if [ -z "$BUMP" ]; then
+            echo "bump=" >> "$GITHUB_OUTPUT"
+            echo "No release-worthy commits since ${LAST_TAG:-root}. Skipping."
+          else
+            echo "bump=$BUMP" >> "$GITHUB_OUTPUT"
+            echo "Decided bump: $BUMP"
+          fi
+
+      - name: Bump version
+        if: steps.bump.outputs.bump != ''
+        id: version
+        run: |
+          set -euo pipefail
+          NEW_VERSION=$(npm version "${{ steps.bump.outputs.bump }}" --no-git-tag-version | tr -d 'v')
+          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Bumped to $NEW_VERSION"
+
+      - name: Commit, tag, push
+        if: steps.bump.outputs.bump != ''
+        env:
+          NEW_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          git add package.json package-lock.json
+          git commit -m "chore(release): v${NEW_VERSION}"
+          git tag -a "v${NEW_VERSION}" -m "Release v${NEW_VERSION}"
+          git push origin HEAD:main
+          git push origin "v${NEW_VERSION}"
+          echo "Pushed v${NEW_VERSION} — publish.yml will now build & publish."

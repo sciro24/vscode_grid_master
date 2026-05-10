@@ -86,11 +86,11 @@ npm run build
 
 echo "▶ Packaging .vsix..."
 npm run package
-VSIX_FILE="grid-master-${NEW_VERSION}.vsix"
+VSIX_FILE="release/grid-master-${NEW_VERSION}.vsix"
 
 if [[ ! -f "$VSIX_FILE" ]]; then
-  # vsce may name it differently if the old version wasn't updated
-  VSIX_FILE=$(ls *.vsix 2>/dev/null | head -1)
+  # Fallback: most recent .vsix in release/
+  VSIX_FILE=$(ls -t release/*.vsix 2>/dev/null | head -1)
 fi
 
 if [[ -z "$VSIX_FILE" ]]; then

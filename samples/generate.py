@@ -157,3 +157,54 @@ small = pd.DataFrame([{
 }])
 small.to_csv(OUT / "tiny.csv", index=False)
 print(f"wrote {OUT / 'tiny.csv'}")
+
+# Partitioned Parquet dataset (Spark-style directory containing N part-files
+# plus a _SUCCESS marker). The directory itself ends in .parquet so VS Code
+# treats it as a Grid Master target.
+import shutil, uuid
+part_dir = OUT / "flights_partitioned.parquet"
+if part_dir.exists():
+    shutil.rmtree(part_dir)
+part_dir.mkdir(parents=True)
+
+# Build a larger frame so the split is meaningful, then chunk into 4 parts.
+big_rows = []
+for i in range(4000):
+    delay = random.gauss(5, 25)
+    big_rows.append({
+        "fl_date": f"2024-{random.randint(1,12):02d}-{random.randint(1,28):02d}",
+        "year": 2024,
+        "month": random.randint(1, 12),
+        "op_unique_carrier": random.choice(CARRIERS),
+        "origin": random.choice(ORIGINS),
+        "dest":   random.choice(ORIGINS),
+        "dep_delay": round(delay, 1),
+        "arr_delay": round(delay + random.gauss(0, 5), 1),
+        "cancelled": random.random() < 0.02,
+        "carrier_delay":  round(max(0, delay * random.random()), 1) if delay > 0 else 0,
+        "weather_delay":  round(max(0, random.gauss(2, 5)), 1),
+        "nas_delay":      round(max(0, random.gauss(3, 4)), 1),
+        "security_delay": 0,
+        "late_aircraft_delay": round(max(0, random.gauss(4, 8)), 1),
+    })
+
+big_df = pd.DataFrame(big_rows)
+big_table = pa.Table.from_pandas(big_df)
+
+NUM_PARTS = 4
+chunk_size = (big_table.num_rows + NUM_PARTS - 1) // NUM_PARTS
+for i in range(NUM_PARTS):
+    start = i * chunk_size
+    end = min(start + chunk_size, big_table.num_rows)
+    if start >= end:
+        break
+    part = big_table.slice(start, end - start)
+    # Spark-style filename: part-NNNNN-<uuid>-cNNN.snappy.parquet
+    name = f"part-{i:05d}-{uuid.uuid4()}-c000.snappy.parquet"
+    pq.write_table(part, part_dir / name, compression="snappy")
+    print(f"  wrote {part_dir.name}/{name} ({end - start} rows)")
+
+# _SUCCESS marker (zero-byte Hadoop convention)
+(part_dir / "_SUCCESS").touch()
+
+print(f"wrote {part_dir} (partitioned dataset, {NUM_PARTS} parts, {big_table.num_rows} total rows)")

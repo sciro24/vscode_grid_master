@@ -61,6 +61,58 @@ export function activate(context: vscode.ExtensionContext): void {
         VIEW_TYPES.CSV;
       await vscode.commands.executeCommand('vscode.openWith', target, viewType);
     }),
+
+    // Dedicated command for opening partitioned dataset directories.
+    // vscode.openWith does not work reliably on directory URIs, so we always
+    // resolve to the directory and pass the matching custom-editor view type.
+    vscode.commands.registerCommand('gridMaster.openDirectory', async (uri?: vscode.Uri) => {
+      const target = uri;
+      if (!target) return;
+      const ext = target.path.split('.').pop()?.toLowerCase() ?? '';
+      const viewType =
+        ext === 'parquet' || ext === 'parq' ? VIEW_TYPES.PARQUET :
+        ext === 'arrow'                     ? VIEW_TYPES.ARROW :
+        VIEW_TYPES.PARQUET;
+      await vscode.commands.executeCommand('vscode.openWith', target, viewType);
+    }),
+
+    // Palette fallback: open a partitioned-dataset folder via picker.
+    // Useful when the directory name doesn't end in .parquet (rare) or when
+    // the explorer context menu isn't available.
+    vscode.commands.registerCommand('gridMaster.openPartitionedFolder', async () => {
+      const picked = await vscode.window.showOpenDialog({
+        canSelectFiles: false,
+        canSelectFolders: true,
+        canSelectMany: false,
+        openLabel: 'Open as Grid Master dataset',
+        title: 'Select a partitioned Parquet/Arrow dataset folder',
+      });
+      if (!picked || picked.length === 0) return;
+      const folder = picked[0];
+      const ext = folder.path.split('.').pop()?.toLowerCase() ?? '';
+      const viewType =
+        ext === 'arrow'   ? VIEW_TYPES.ARROW :
+        VIEW_TYPES.PARQUET;
+      await vscode.commands.executeCommand('vscode.openWith', folder, viewType);
+    }),
+  );
+
+  // Detect when the user opens a part-file (e.g. part-00000-*.snappy.parquet)
+  // that lives inside a *.parquet/*.parq/*.arrow directory and offer to open
+  // the parent directory as a single merged dataset instead.
+  context.subscriptions.push(
+    vscode.window.onDidChangeActiveTextEditor(async editor => {
+      if (!editor) return;
+      await maybeOfferPartitionedOpen(editor.document.uri);
+    }),
+    vscode.window.tabGroups.onDidChangeTabs(async e => {
+      for (const tab of e.opened) {
+        const input = tab.input;
+        if (input instanceof vscode.TabInputCustom || input instanceof vscode.TabInputText) {
+          await maybeOfferPartitionedOpen(input.uri);
+        }
+      }
+    }),
   );
 
   // Show one-time prompt to set Grid Master as the default editor.
@@ -88,6 +140,46 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     });
     context.subscriptions.push(listener);
+  }
+}
+
+// Per-session memo of folders we've already prompted about — avoids spamming
+// the user when they click multiple part-files inside the same directory.
+const promptedFolders = new Set<string>();
+
+async function maybeOfferPartitionedOpen(uri: vscode.Uri): Promise<void> {
+  if (uri.scheme !== 'file') return;
+  const lowerPath = uri.path.toLowerCase();
+  // Match part files: anything with `.parquet` somewhere (covers .snappy.parquet,
+  // .zstd.parquet, .parquet) and *.arrow / *.feather.
+  const isPartFile =
+    lowerPath.includes('.parquet') ||
+    lowerPath.endsWith('.arrow') ||
+    lowerPath.endsWith('.feather');
+  if (!isPartFile) return;
+
+  const parent = vscode.Uri.joinPath(uri, '..');
+  const parentLower = parent.path.toLowerCase();
+  const isPartitionedDir =
+    parentLower.endsWith('.parquet') ||
+    parentLower.endsWith('.parq') ||
+    parentLower.endsWith('.arrow');
+  if (!isPartitionedDir) return;
+
+  if (promptedFolders.has(parent.toString())) return;
+  promptedFolders.add(parent.toString());
+
+  const folderName = parent.path.split('/').pop() ?? 'this folder';
+  const choice = await vscode.window.showInformationMessage(
+    `“${folderName}” looks like a partitioned dataset. Open the whole folder as one table in Grid Master?`,
+    'Open folder in Grid Master',
+    'Just this file',
+  );
+  if (choice === 'Open folder in Grid Master') {
+    const ext = parent.path.split('.').pop()?.toLowerCase() ?? '';
+    const viewType =
+      ext === 'arrow' ? VIEW_TYPES.ARROW : VIEW_TYPES.PARQUET;
+    await vscode.commands.executeCommand('vscode.openWith', parent, viewType);
   }
 }
 

@@ -1,21 +1,40 @@
-# Dependencies
+# ── Dependencies ──────────────────────────────────────────────────────────
 node_modules/
 webview-ui/node_modules/
 
-# Build outputs
+# ── Build outputs ─────────────────────────────────────────────────────────
 dist/
 out/
 webview-ui/dist/
+*.tsbuildinfo
 
-# Packaged extensions
+# ── Packaged extensions ───────────────────────────────────────────────────
 *.vsix
+release/
 
-# Test artefacts and fixtures
-test-data/
+# ── Editor / OS ───────────────────────────────────────────────────────────
+.DS_Store
+**/.DS_Store
+Thumbs.db
+.vscode/
 .vscode-test/
-coverage/
+.idea/
+*.swp
+*~
 
-# Generated sample data files (keep generate.py, ignore the artefacts)
+# ── Logs ──────────────────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ── Test artefacts and coverage ───────────────────────────────────────────
+coverage/
+test-data/
+.nyc_output/
+
+# ── Generated sample data files (keep generate.py, ignore the artefacts) ──
 samples/*.csv
 samples/*.tsv
 samples/*.parquet
@@ -25,22 +44,39 @@ samples/*.feather
 samples/*.json
 samples/*.jsonl
 samples/*.ndjson
+samples/*.xlsx
+samples/*.xlsb
+samples/*.xls
+samples/*.xlsm
+samples/*.avro
+samples/*.db
+samples/*.sqlite
+samples/*.sqlite3
+samples/*.orc
+samples/sample_*/
 
-# Editor / OS
-.DS_Store
-**/.DS_Store
-.vscode/
-.idea/
-
-# Logs
-*.log
-npm-debug.log*
-
-# Local agent / tooling state
+# ── Local agent / tooling state ───────────────────────────────────────────
 .claude/
+.cursor/
+.aider*
+.continue/
 
-# Claude / AI-generated session files
+# ── Environment / secrets ─────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ── Claude / AI-generated session files (do not commit) ───────────────────
 STATUS.md
 REPORT*.md
 SUMMARY*.md
+NOTES*.md
+SCRATCH*.md
 CLAUDE.md
+PUBLISH.md
+
+# ── Misc ──────────────────────────────────────────────────────────────────
+.cache/
+tmp/

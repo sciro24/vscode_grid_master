@@ -2,7 +2,17 @@
 
 **A fast, in-editor data grid for VS Code.** Open CSV, Parquet, Arrow, JSON, Excel, SQLite, Avro and ORC files as an interactive spreadsheet — without ever leaving the editor.
 
-![Grid Master screenshot](assets/icon.png)
+<p align="center">
+  <img src="assets/screenshot-1.png" alt="Grid Master — main grid view" width="48%" />
+  &nbsp;&nbsp;
+  <img src="assets/screenshot-2.png" alt="Grid Master — filter and column tools" width="48%" />
+</p>
+
+<!--
+  Drop two screenshots into assets/ named screenshot-1.png and screenshot-2.png.
+  Recommended size: 1280×800 each, PNG, ≤300 KB. They render side-by-side here
+  and on both the VS Marketplace and Open VSX listings.
+-->
 
 ---
 
@@ -57,6 +67,20 @@
 
 ### SQLite multi-table
 - When you open a `.db` file with multiple tables, Grid Master shows a quick-pick so you can choose which table to load.
+
+---
+
+## See it in action
+
+<p align="center">
+  <img src="assets/demo.gif" alt="Grid Master demo" width="80%" />
+</p>
+
+<!--
+  Drop a demo recording at assets/demo.gif (or assets/demo.mp4 — for video,
+  replace the <img> above with a <video> tag). Keep it under 8 MB so it
+  renders inline on GitHub and the marketplaces. ~10–20 seconds is plenty.
+-->
 
 ---
 

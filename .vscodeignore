@@ -1,26 +1,88 @@
-.vscode/**
-.vscode-test/**
-.claude/**
+# ── Source (only compiled output ships) ───────────────────────────────────
 src/**
 webview-ui/src/**
-webview-ui/node_modules/**
 webview-ui/index.html
+webview-ui/public/**
+webview-ui/svelte.config.js
+webview-ui/svelte.config.ts
+webview-ui/tsconfig.json
+webview-ui/tsconfig.*.json
+webview-ui/vite.config.ts
+webview-ui/vite.config.js
 webview-ui/package.json
 webview-ui/package-lock.json
-webview-ui/vite.config.ts
+webview-ui/node_modules/**
+
+# ── Build / tooling configs (not needed at runtime) ───────────────────────
+esbuild.config.mjs
+tsconfig.json
+tsconfig.*.json
+.eslintrc.json
+.eslintrc.*
+.eslintignore
+.prettierrc
+.prettierrc.*
+.prettierignore
+.editorconfig
+
+# ── Tests ─────────────────────────────────────────────────────────────────
 test/**
+tests/**
 test-data/**
-samples/**
+**/*.test.ts
+**/*.test.js
+**/*.spec.ts
+**/*.spec.js
+coverage/**
+.nyc_output/**
+
+# ── Dev / OS / editor metadata ────────────────────────────────────────────
+.vscode/**
+.vscode-test/**
+.idea/**
+**/.DS_Store
+**/Thumbs.db
+*.swp
+*~
+
+# ── CI / repo meta ────────────────────────────────────────────────────────
 .github/**
 .gitignore
-.eslintrc.json
-tsconfig.json
-esbuild.config.mjs
+.gitattributes
+
+# ── Source maps and TS build info ─────────────────────────────────────────
 **/*.map
-**/.DS_Store
-node_modules/**
-out/**
+**/*.tsbuildinfo
+
+# ── Sample / fixture data (large; not needed for users) ───────────────────
+samples/**
+
+# ── Scripts (release / dev tooling, not for end users) ────────────────────
+scripts/**
+
+# ── Local agent / tooling state ───────────────────────────────────────────
+.claude/**
+.cursor/**
+.aider*
+.continue/**
+
+# ── Logs / env / secrets ──────────────────────────────────────────────────
+*.log
+npm-debug.log*
+.env
+.env.*
+
+# ── AI-generated session files (must never ship) ──────────────────────────
 CLAUDE.md
+PUBLISH.md
 STATUS.md
 REPORT*.md
 SUMMARY*.md
+NOTES*.md
+SCRATCH*.md
+
+# ── Other build artefacts (the .vsix itself) ──────────────────────────────
+*.vsix
+release/**
+node_modules/**
+out/**
