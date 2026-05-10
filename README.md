@@ -131,9 +131,8 @@
 ## See it in action
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/sciro24/vscode_grid_master/main/assets/demo.gif" alt="Grid Master demo" width="80%" />
+  <img src="https://raw.githubusercontent.com/sciro24/vscode_grid_master/main/assets/demo2.gif" alt="Grid Master demo" width="97%" />
 </p>
-
 
 ---
 
@@ -144,9 +143,6 @@
   &nbsp;&nbsp;
   <img src="https://raw.githubusercontent.com/sciro24/vscode_grid_master/main/assets/filter.png" alt="Filter and color columns" width="48%" />
 </p>
-
-
-
 ---
 
 ## Getting started
