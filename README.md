@@ -1,22 +1,56 @@
-# Grid Master
+<p align="center">
+  <img src="https://raw.githubusercontent.com/sciro24/vscode_grid_master/main/icon.png" width="128" alt="Grid Master Logo">
+</p>
 
-[![VS Marketplace Version](https://img.shields.io/visual-studio-marketplace/v/DiegoScirocco.grid-master?style=flat-square&logo=visualstudiocode&logoColor=white&label=Marketplace&color=007ACC)](https://marketplace.visualstudio.com/items?itemName=DiegoScirocco.grid-master)
-[![VS Marketplace Installs](https://img.shields.io/visual-studio-marketplace/i/DiegoScirocco.grid-master?style=flat-square&logo=visualstudiocode&logoColor=white&label=Installs&color=007ACC)](https://marketplace.visualstudio.com/items?itemName=DiegoScirocco.grid-master)
-[![VS Marketplace Rating](https://img.shields.io/visual-studio-marketplace/r/DiegoScirocco.grid-master?style=flat-square&logo=visualstudiocode&logoColor=white&label=Rating&color=007ACC)](https://marketplace.visualstudio.com/items?itemName=DiegoScirocco.grid-master&ssr=false#review-details)
-[![Open VSX](https://img.shields.io/open-vsx/v/DiegoScirocco/grid-master?style=flat-square&logo=eclipseide&logoColor=white&label=Open%20VSX&color=C160EF)](https://open-vsx.org/extension/DiegoScirocco/grid-master)
-[![License: MIT](https://img.shields.io/github/license/sciro24/vscode_grid_master?style=flat-square&color=brightgreen)](https://github.com/sciro24/vscode_grid_master/blob/main/LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/sciro24/vscode_grid_master?style=flat-square&logo=github&color=ffb86c)](https://github.com/sciro24/vscode_grid_master/stargazers)
+<h1 align="center">Grid Master</h1>
 
-[![Svelte 5](https://img.shields.io/badge/Svelte-5-FF3E00?style=flat-square&logo=svelte&logoColor=white)](https://svelte.dev/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Apache Arrow](https://img.shields.io/badge/Apache%20Arrow-WASM-1e6091?style=flat-square&logo=apache&logoColor=white)](https://arrow.apache.org/)
-[![Parquet](https://img.shields.io/badge/Parquet-WASM-2A6DB4?style=flat-square&logo=apacheparquet&logoColor=white)](https://parquet.apache.org/)
-[![SheetJS](https://img.shields.io/badge/Excel-SheetJS-217346?style=flat-square&logo=microsoftexcel&logoColor=white)](https://sheetjs.com/)
-[![SQLite](https://img.shields.io/badge/SQLite-sql.js-003B57?style=flat-square&logo=sqlite&logoColor=white)](https://sql.js.org/)
-[![100% offline](https://img.shields.io/badge/100%25-offline-success?style=flat-square)](https://github.com/sciro24/vscode_grid_master#privacy)
-[![No telemetry](https://img.shields.io/badge/no-telemetry-success?style=flat-square)](https://github.com/sciro24/vscode_grid_master#privacy)
+<p align="center">
+  <a href="https://marketplace.visualstudio.com/items?itemName=DiegoScirocco.grid-master">
+    <img src="https://img.shields.io/visual-studio-marketplace/v/DiegoScirocco.grid-master?style=flat-square&logo=visual-studio-code&logoColor=3778C6&label=VS%20Marketplace" alt="VS Marketplace">
+  </a>
+  <a href="https://open-vsx.org/extension/DiegoScirocco/grid-master">
+    <img src="https://img.shields.io/open-vsx/v/DiegoScirocco/grid-master?style=flat-square&logo=eclipseide&logoColor=white&label=Open%20VSX&color=C160EF" alt="Open VSX">
+  </a>
+  <a href="https://marketplace.visualstudio.com/items?itemName=DiegoScirocco.grid-master">
+    <img src="https://img.shields.io/visual-studio-marketplace/i/DiegoScirocco.grid-master?style=flat-square&color=blueviolet" alt="Installs">
+  </a>
+  <a href="https://github.com/sciro24/vscode_grid_master/blob/main/LICENSE">
+    <img src="https://img.shields.io/github/license/sciro24/vscode_grid_master?style=flat-square&color=brightgreen" alt="License">
+  </a>
+</p>
 
-**The fast data grid for VS Code.** Open CSV, Parquet, Arrow, Excel, JSON, SQLite, Avro and ORC files as an interactive spreadsheet — sort, filter, search, edit and color-code columns without ever leaving the editor.
+<p align="center">
+  <img src="https://img.shields.io/badge/100%25-offline-success?style=flat-square" alt="100% offline">
+  <img src="https://img.shields.io/badge/no-telemetry-success?style=flat-square" alt="No telemetry">
+  <img src="https://img.shields.io/visual-studio-marketplace/size/DiegoScirocco.grid-master?style=flat-square&color=informational" alt="Extension Size">
+</p>
+
+<p align="center">
+  <b>The fast data grid for VS Code.</b> Open CSV, Parquet, Arrow, Excel, JSON, SQLite, Avro and ORC files as an interactive spreadsheet — sort, filter, search, edit and color-code columns without ever leaving the editor.
+</p>
+
+---
+
+<p align="center">
+  <a href="https://svelte.dev/">
+    <img src="https://img.shields.io/badge/Svelte-5-FF3E00?style=flat-square&logo=svelte&logoColor=white" alt="Svelte 5">
+  </a>
+  <a href="https://www.typescriptlang.org/">
+    <img src="https://img.shields.io/badge/TypeScript-5-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
+  </a>
+  <a href="https://arrow.apache.org/">
+    <img src="https://img.shields.io/badge/Apache%20Arrow-WASM-1e6091?style=flat-square&logo=apache&logoColor=white" alt="Apache Arrow">
+  </a>
+  <a href="https://parquet.apache.org/">
+    <img src="https://img.shields.io/badge/Parquet-WASM-2A6DB4?style=flat-square&logo=apacheparquet&logoColor=white" alt="Parquet">
+  </a>
+  <a href="https://sheetjs.com/">
+    <img src="https://img.shields.io/badge/Excel-SheetJS-217346?style=flat-square&logo=microsoftexcel&logoColor=white" alt="SheetJS">
+  </a>
+  <a href="https://sql.js.org/">
+    <img src="https://img.shields.io/badge/SQLite-sql.js-003B57?style=flat-square&logo=sqlite&logoColor=white" alt="SQLite">
+  </a>
+</p>
 
 **Without Grid Master**
 
