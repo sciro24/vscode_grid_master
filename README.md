@@ -39,22 +39,34 @@
 - **LRU chunk cache** — memory stays bounded no matter the file size.
 
 ### Sort, filter, search
-- **Click-to-sort** on any column header — cycles ascending → descending → off.
+- **Sort, filter & more** from the column header — right-click any header for ascending / descending sort, per-column filter, copy column, rename, duplicate, hide and delete.
 - **Per-column filters** — equals, contains, greater than, regex, is null, and more.
 - **Global search** — instantly filters all rows across every column.
 - **Live row count** — see how many rows match the current query.
 
+### Selection & navigation
+- **Click a row number** to select the entire row — right-click for a row context menu (insert above/below, duplicate, delete, copy).
+- **Click a column header** to select the whole column — right-click for the full column menu.
+- **Cross selection** — select a row *and* a column together; the cell at their intersection is highlighted distinctly so you can quickly read the value at any pivot.
+- **Click a cell** to focus it; **double-click** to edit inline.
+
 ### Editing
 - **Inline editing** — double-click any cell to edit in place.
-- **Per-edit Undo** — step back one change at a time.
-- **Discard all** — revert every pending edit in one click.
+- **Insert / duplicate / delete rows** straight from the row context menu (CSV).
+- **Insert / duplicate / delete columns** + **rename** straight from the header context menu (CSV).
+- **Full undo history** — Undo steps back through every change, including row and column structural edits.
+- **Discard all** — revert every pending edit (cells and structural changes) in one click.
 - **Save** — write changes back to the file (CSV/TSV).
 
 ### Column tools
 - **Drag-to-resize** column borders. Double-click the resize handle to auto-fit.
 - **Hide/show columns** from the toolbar dropdown.
-- **Column color coding** — pastel palette makes wide tables easier to scan.
-- **Column statistics** — min, max, distinct count and null count on demand.
+- **Column color coding** — pastel palette makes wide tables easier to scan; selection styles adapt automatically so colours and highlights stay readable together.
+- **Copy a row or column** to the clipboard as TSV.
+
+### Statistics
+- **Per-column statistics panel** — min, max, mean, median, stddev, distribution histogram, top 10 values and null/distinct counts. Open from the column right-click menu.
+- **Dataset overview** — total rows / columns / cells, null density, type distribution and a per-column summary table. One click on the chart icon in the toolbar.
 
 ### Persistence & privacy
 - **Sidecar** — column widths and hidden columns are saved to a tiny `.gridmaster.json` file next to your data. Reopen and pick up where you left off.
