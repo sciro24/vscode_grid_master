@@ -3,10 +3,13 @@ name: Release
 # Auto-versioning from Conventional Commits.
 # On push to main:
 #   1. Read commits since the last v* tag
-#   2. Decide the bump:  feat → minor,  fix → patch,  BREAKING CHANGE / "!" → major
+#   2. Decide the bump:  feat → minor,  fix/perf → patch,  BREAKING CHANGE / "!" → major
 #   3. If anything bumpable was committed: update package.json, commit, tag vX.Y.Z, push.
-# Pushing the tag triggers .github/workflows/publish.yml which publishes to
-# VS Marketplace and Open VSX.
+#   4. Call publish.yml as a reusable workflow to publish to the marketplaces.
+#
+# Why call publish.yml directly instead of relying on the tag-push trigger:
+# when GITHUB_TOKEN pushes a tag, that push does NOT trigger other workflows
+# (anti-loop protection). So we invoke publish.yml from here.
 #
 # Skip rules:
 #   - chore:, docs:, ci:, refactor:, test:, style: alone do NOT trigger a release.
@@ -33,6 +36,9 @@ jobs:
     runs-on: ubuntu-latest
     # Don't run on the release commit we just pushed
     if: "!startsWith(github.event.head_commit.message, 'chore(release):')"
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      bumped:  ${{ steps.bump.outputs.bump != '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -115,4 +121,14 @@ jobs:
           git tag -a "v${NEW_VERSION}" -m "Release v${NEW_VERSION}"
           git push origin HEAD:main
           git push origin "v${NEW_VERSION}"
-          echo "Pushed v${NEW_VERSION} — publish.yml will now build & publish."
+          echo "Pushed v${NEW_VERSION} — publish job will now build & publish."
+
+  # Invoke publish.yml as a reusable workflow. Only runs when the release job
+  # actually bumped a version. Secrets must be passed explicitly.
+  publish:
+    needs: release
+    if: needs.release.outputs.bumped == 'true'
+    uses: ./.github/workflows/publish.yml
+    secrets:
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
+      OVSX_PAT: ${{ secrets.OVSX_PAT }}

@@ -1,14 +1,23 @@
 name: Publish
 
-# Triggered by .github/workflows/release.yml when it pushes a v* tag after
-# auto-bumping the version from Conventional Commits.
-# Can also be triggered manually by pushing a v* tag (emergency fallback —
-# see the "Fallback manuale" section in PUBLISH.md).
+# Pubblica su VS Marketplace e Open VSX. Triggerato in due modi:
+#   1) workflow_call — invocato da release.yml dopo il bump auto.
+#   2) push del tag v* — fallback manuale (vedi PUBLISH.md "Fallback manuale").
+#
+# Nota: quando release.yml pusha un tag con GITHUB_TOKEN, il push NON triggera
+# altri workflow (protezione anti-loop di GitHub Actions). Per questo
+# release.yml chiama publish.yml direttamente come reusable workflow.
 
 on:
   push:
     tags:
       - 'v*'
+  workflow_call:
+    secrets:
+      VSCE_PAT:
+        required: true
+      OVSX_PAT:
+        required: true
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -18,6 +27,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # When called from release.yml the bump commit may be on main but
+          # the tag points there too, so default checkout is fine. Explicit
+          # ref ensures we always grab the tagged commit when push-tag triggers.
+          ref: ${{ github.ref }}
 
       - uses: actions/setup-node@v4
         with:
