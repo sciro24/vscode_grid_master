@@ -2,7 +2,7 @@
   "name": "grid-master",
   "displayName": "Grid Master",
   "description": "Open CSV, TSV, Parquet, Arrow, JSON, Excel, SQLite, Avro and ORC files as a fast interactive spreadsheet inside VS Code — sort, filter, search, edit and color columns without leaving your editor.",
-  "version": "0.2.5",
+  "version": "0.3.0",
   "publisher": "DiegoScirocco",
   "license": "MIT",
   "repository": {
