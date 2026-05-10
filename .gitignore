@@ -68,7 +68,7 @@ samples/sample_*/
 *.pem
 *.key
 
-# ── Claude / AI-generated session files (do not commit) ───────────────────
+# ── Claude / AI-generated session files ───────────────────
 STATUS.md
 REPORT*.md
 SUMMARY*.md

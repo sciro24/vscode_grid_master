@@ -2,12 +2,16 @@ name: Publish
 
 # Triggered by .github/workflows/release.yml when it pushes a v* tag after
 # auto-bumping the version from Conventional Commits.
-# Can also be triggered manually by pushing a tag (e.g. ./scripts/release.sh).
+# Can also be triggered manually by pushing a v* tag (emergency fallback —
+# see the "Fallback manuale" section in PUBLISH.md).
 
 on:
   push:
     tags:
       - 'v*'
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   publish:
