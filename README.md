@@ -1,72 +1,69 @@
 # Grid Master
 
-**A fast, in-editor data grid for VS Code.** Open CSV, Parquet, Arrow, JSON, Excel, SQLite, Avro and ORC files as an interactive spreadsheet — without ever leaving the editor.
+**The fast data grid for VS Code.** Open CSV, Parquet, Arrow, Excel, JSON, SQLite, Avro and ORC files as an interactive spreadsheet — sort, filter, search, edit and color-code columns without ever leaving the editor.
 
 <p align="center">
-  <img src="assets/screenshot-1.png" alt="Grid Master — main grid view" width="48%" />
+  <img src="assets/screenshot-1.png" alt="Grid Master — data grid view" width="48%" />
   &nbsp;&nbsp;
   <img src="assets/screenshot-2.png" alt="Grid Master — filter and column tools" width="48%" />
 </p>
 
 <!--
-  Drop two screenshots into assets/ named screenshot-1.png and screenshot-2.png.
-  Recommended size: 1280×800 each, PNG, ≤300 KB. They render side-by-side here
-  and on both the VS Marketplace and Open VSX listings.
+  SCREENSHOTS: place two PNG files in the assets/ folder:
+    assets/screenshot-1.png   (e.g. the main grid with a large Parquet file open)
+    assets/screenshot-2.png   (e.g. filter panel, column colors, or inline edit)
+  Recommended: 1280×800 px, PNG, ≤ 300 KB each.
+  They render side-by-side here on GitHub and on both the VS Marketplace and Open VSX listing pages.
 -->
 
 ---
 
 ## Supported formats
 
-| Extension | Format | Engine |
+| Format | Extensions | Notes |
 |---|---|---|
-| `.csv` `.tsv` `.txt` | Delimited text | PapaParse (inline, instant) |
-| `.parquet` `.parq` | Apache Parquet | parquet-wasm + Apache Arrow |
-| `.arrow` `.feather` | Apache Arrow / Feather | Apache Arrow JS |
-| `.json` | JSON array | In-worker parser |
-| `.jsonl` `.ndjson` | Newline-delimited JSON | In-worker parser |
-| `.xlsx` `.xlsb` `.xls` `.xlsm` | Excel workbooks | SheetJS (in-worker) |
-| `.avro` | Apache Avro (OCF) | avsc (extension host) |
-| `.db` `.sqlite` `.sqlite3` | SQLite databases | sql.js WASM (extension host) |
-| `.orc` | Apache ORC | pyorc via Python 3 (extension host) |
+| CSV / TSV | `.csv` `.tsv` | Auto-detects delimiter; instant open |
+| Apache Parquet | `.parquet` `.parq` | WASM-based; partitioned directories supported |
+| Apache Arrow / Feather | `.arrow` `.feather` | Direct Arrow IPC decoding |
+| JSON | `.json` | Right-click → Open with Grid Master |
+| Newline-delimited JSON | `.jsonl` `.ndjson` | Opens as default editor |
+| Excel workbooks | `.xlsx` `.xlsb` `.xls` `.xlsm` | First sheet loaded via SheetJS |
+| Apache Avro | `.avro` | Decoded on extension host via avsc |
+| SQLite | `.db` `.sqlite` `.sqlite3` | Multi-table support with quick-pick |
+| Apache ORC | `.orc` | Requires Python 3 + `pip3 install pyorc` |
 
-**Partitioned datasets** (Spark-style directories named `*.parquet` containing `part-*.parquet` files) are detected automatically and loaded as a single merged table.
+**Partitioned Parquet/Arrow datasets** (Spark-style `*.parquet` directories containing `part-*.snappy.parquet` files) are detected automatically and loaded as a single merged table.
 
 ---
 
 ## Features
 
-### Grid & navigation
-- **Virtualised renderer** — only rows in the visible viewport are rendered. 1M-row Parquet files scroll at 60 fps.
-- **Click-to-sort** on any column header — cycles asc → desc → unsorted.
-- **Drag-to-resize** column borders. Double-click the resize handle to auto-fit to content.
-- **Column color coding** — toggle a muted pastel palette to make wide tables easier to scan visually.
-- **Hide / show columns** from a dropdown panel in the toolbar.
+### Fast rendering
+- **Virtualised grid** — only the rows in the visible viewport are rendered. Scroll through million-row Parquet files at 60 fps.
+- **Lazy loading for large files** — tables over 100k rows are served in chunks; the grid is interactive immediately while data streams in the background.
+- **LRU chunk cache** — memory stays bounded no matter the file size.
 
-### Search & filter
-- **Global search** — type in the toolbar to instantly filter all rows across every column.
-- **Per-column filters** — click the filter icon on any header to set conditions (equals, contains, greater than, regex, is null, etc.).
-- **Live row count** — the toolbar shows how many rows match the current search/filter.
+### Sort, filter, search
+- **Click-to-sort** on any column header — cycles ascending → descending → off.
+- **Per-column filters** — equals, contains, greater than, regex, is null, and more.
+- **Global search** — instantly filters all rows across every column.
+- **Live row count** — see how many rows match the current query.
 
 ### Editing
-- **Inline editing** — double-click any cell to edit its value in place.
-- **Per-edit Undo** — step back through changes one at a time.
-- **Discard all** — revert every pending edit with one click.
-- **Save** — write edits back to the file (CSV formats).
+- **Inline editing** — double-click any cell to edit in place.
+- **Per-edit Undo** — step back one change at a time.
+- **Discard all** — revert every pending edit in one click.
+- **Save** — write changes back to the file (CSV/TSV).
 
-### Data quality
-- **Type inference** — numbers, booleans, dates and strings are detected automatically from the data.
-- **No locale-mangling** — `2024` stays `2024`, never `2.024`. Numbers use plain formatting regardless of the OS locale.
-- **Null awareness** — null / empty / NA cells are displayed distinctly and handled correctly in filters and stats.
+### Column tools
+- **Drag-to-resize** column borders. Double-click the resize handle to auto-fit.
+- **Hide/show columns** from the toolbar dropdown.
+- **Column color coding** — pastel palette makes wide tables easier to scan.
+- **Column statistics** — min, max, distinct count and null count on demand.
 
-### Persistence
-- **Sidecar file** — column widths and hidden columns are remembered per-file in a tiny `.gridmaster.json` next to the data file.
-
-### Export
-- **Export as CSV / TSV / JSON** from the toolbar — saves the current filtered and sorted view.
-
-### SQLite multi-table
-- When you open a `.db` file with multiple tables, Grid Master shows a quick-pick so you can choose which table to load.
+### Persistence & privacy
+- **Sidecar** — column widths and hidden columns are saved to a tiny `.gridmaster.json` file next to your data. Reopen and pick up where you left off.
+- **100% offline** — files are never uploaded. No telemetry, no network requests. Parquet and Arrow WASM are bundled inside the extension.
 
 ---
 
@@ -77,19 +74,22 @@
 </p>
 
 <!--
-  Drop a demo recording at assets/demo.gif (or assets/demo.mp4 — for video,
-  replace the <img> above with a <video> tag). Keep it under 8 MB so it
-  renders inline on GitHub and the marketplaces. ~10–20 seconds is plenty.
+  DEMO VIDEO / GIF: place one file in the assets/ folder:
+    assets/demo.gif   (recommended, ≤ 8 MB, ~10–20 seconds)
+  Or for video on GitHub: replace the <img> above with:
+    <video src="assets/demo.mp4" autoplay loop muted width="80%"></video>
+  Note: VS Marketplace and Open VSX do not play <video> — use GIF for broadest compatibility.
 -->
 
 ---
 
 ## Getting started
 
-1. **Install** the extension from the VS Code Marketplace.
-2. **Open any supported file** — Grid Master activates automatically for `.csv`, `.parquet`, `.arrow`, `.jsonl`, `.xlsx`, `.avro`, `.db`, `.orc` and more.
-3. For `.json` files (which are common in non-tabular contexts), right-click in the Explorer and pick **Open with Grid Master**.
-4. **ORC files** require Python 3 with `pyorc` installed: `pip3 install pyorc`.
+1. **Install** Grid Master from the VS Marketplace or Open VSX.
+2. **Open any supported file** — Grid Master activates automatically for `.csv`, `.tsv`, `.parquet`, `.arrow`, `.feather`, `.jsonl`, `.ndjson`, `.xlsx`, `.xlsb`, `.xls`, `.xlsm`, `.avro`, `.db`, `.sqlite`, `.sqlite3`, `.orc`.
+3. **JSON files** (`.json`) are not set as default to avoid overriding the built-in editor. Right-click in the Explorer and choose **Open with Grid Master**.
+4. **ORC files** require Python 3 with pyorc: `pip3 install pyorc`.
+5. **Partitioned datasets** — right-click the folder in the Explorer and choose **Open with Grid Master**, or just open any part-file and accept the popup.
 
 ---
 
@@ -97,13 +97,12 @@
 
 | Command | Description |
 |---|---|
-| `Grid Master: Open with Grid Master` | Open the active or selected file in the grid |
-| `Grid Master: Open as Text` | Re-open the current file in VS Code's plain text editor |
-| `Grid Master: Set as Default Editor` | Register Grid Master as the default editor for all supported tabular formats |
-| `Grid Master: Export as CSV` | Export the current view (with active filters/sort) to a CSV file |
-| `Grid Master: Export as TSV` | Export as tab-separated values |
-| `Grid Master: Export as JSON` | Export as a JSON array |
+| `Open with Grid Master` | Open the selected file or folder in the grid (Explorer context menu) |
+| `Grid Master: Open as Text` | Re-open the current file in VS Code's plain-text editor |
+| `Grid Master: Set as Default Editor` | Register Grid Master as the default editor for all supported formats |
+| `Grid Master: Export as CSV` | Save the current filtered/sorted view to a CSV file |
 | `Grid Master: Show Column Statistics` | Min, max, distinct count and null count for the focused column |
+| `Grid Master: Open Partitioned Dataset Folder…` | Pick a Parquet/Arrow folder from a dialog |
 
 ---
 
@@ -111,46 +110,39 @@
 
 | Setting | Default | Description |
 |---|---|---|
-| `gridMaster.csvDelimiterAutoDetect` | `true` | Auto-detect the CSV delimiter |
+| `gridMaster.csvDelimiterAutoDetect` | `true` | Auto-detect CSV/TSV delimiter |
 | `gridMaster.csvDelimiter` | `,` | Fallback delimiter when auto-detect is off |
 | `gridMaster.maxRowsInMemory` | `25000` | Maximum rows kept in the LRU cache |
-| `gridMaster.chunkSize` | `500` | Rows fetched per virtual scroll chunk |
+| `gridMaster.chunkSize` | `500` | Rows per virtual-scroll chunk |
 | `gridMaster.dateFormat` | `auto` | Date display format: `auto`, `ISO`, or `locale` |
 
 ---
 
 ## Performance
 
-| Format | Parsing | Notes |
+| Format | Where parsed | Notes |
 |---|---|---|
-| CSV / TSV | Main thread, synchronous | PapaParse; files up to ~500 MB open in under a second |
-| Parquet / Arrow | Web Worker (WASM) | parquet-wasm + Apache Arrow; only scrolled chunks are decoded |
-| JSON / NDJSON | Web Worker | Parsed directly; avoids `eval`-based paths that break VS Code's CSP |
-| Excel | Web Worker | SheetJS reads the first sheet |
-| SQLite / Avro / ORC | Extension host (Node.js) | Decoded server-side, streamed to the webview as rows |
-
-An LRU chunk cache keeps memory bounded regardless of file size. Sorting and filtering run inside the worker over a fully materialised row array, so no round-trips to disk for every sort click.
-
----
-
-## Privacy
-
-Grid Master runs entirely on your machine. Files are never uploaded anywhere, no telemetry is collected, and no network requests are made (Parquet/Arrow WASM is inlined into the extension bundle).
+| CSV / TSV | Main thread | PapaParse; up to ~500 MB in under a second |
+| Parquet / Arrow | Web Worker (WASM) | parquet-wasm + Apache Arrow JS; chunk-based lazy reads |
+| JSON / NDJSON | Web Worker | Inline parser; no `eval`, fully CSP-compliant |
+| Excel | Web Worker | SheetJS; first sheet only |
+| SQLite | Extension host | sql.js WASM; multi-table quick-pick |
+| Avro | Extension host | avsc decoder |
+| ORC | Extension host | python3 -m pyorc subprocess |
 
 ---
 
 ## Requirements
 
-- VS Code 1.74 or later.
-- For ORC files: Python 3 with `pip3 install pyorc`.
-- For Avro files: no extra dependencies (avsc is bundled).
-- For SQLite files: no extra dependencies (sql.js WASM is bundled).
+- VS Code **1.74** or later.
+- ORC files: Python 3 with `pip3 install pyorc`.
+- All other formats: no additional dependencies (WASM runtimes are bundled).
 
 ---
 
 ## Issues & feedback
 
-Found a bug or have a feature request? [Open an issue on GitHub](https://github.com/sciro24/vscode_grid_master/issues).
+Found a bug or want a new feature? [Open an issue on GitHub](https://github.com/sciro24/vscode_grid_master/issues).
 
 ---
 
