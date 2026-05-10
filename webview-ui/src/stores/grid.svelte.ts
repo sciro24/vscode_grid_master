@@ -7,6 +7,53 @@ import { uiStore } from './ui.svelte.js';
 // LRU chunk cache: rowStart → rows
 type ChunkCache = Map<number, CellValue[][]>;
 
+export interface ColumnReport {
+  colIndex: number;
+  name: string;
+  type: string;
+  total: number;
+  nulls: number;
+  distinct: number;
+  top: { value: string; count: number }[];
+  numeric?: {
+    min: number;
+    max: number;
+    mean: number;
+    median: number;
+    stddev: number;
+    sum: number;
+    histogram: { from: number; to: number; count: number }[];
+  };
+}
+
+export type EditAction =
+  | { kind: 'CELL_EDIT'; row: number; col: number; oldValue: CellValue; newValue: CellValue }
+  | { kind: 'ROW_INSERT'; row: number; insertedRow: CellValue[] }
+  | { kind: 'ROW_DELETE'; row: number; deletedRow: CellValue[] }
+  | { kind: 'COL_INSERT'; colIndex: number; insertedCol: ColumnSchema; insertedValues: CellValue[] }
+  | { kind: 'COL_DELETE'; colIndex: number; deletedCol: ColumnSchema; deletedValues: CellValue[] }
+  | { kind: 'COL_RENAME'; colIndex: number; oldName: string; newName: string };
+
+export interface DatasetReport {
+  totalRows: number;
+  totalCols: number;
+  totalCells: number;
+  nullCells: number;
+  nullPct: number;
+  typeCounts: Record<string, number>;
+  columns: {
+    index: number;
+    name: string;
+    type: string;
+    nulls: number;
+    nullPct: number;
+    distinct: number;
+    mean?: number;
+    min?: number;
+    max?: number;
+  }[];
+}
+
 class GridStore {
   // File metadata
   fileType = $state<'csv' | 'parquet' | 'arrow' | 'json' | 'excel' | 'avro' | 'sqlite' | 'orc'>('csv');
@@ -31,6 +78,10 @@ class GridStore {
   // CSV-only: full dataset held in memory for inline filter/sort
   private _csvAllRows: CellValue[][] = [];
 
+  // Maps visible-row index (after filter/sort) → actual index in _csvAllRows.
+  // Empty when there are no filters/sort/search active (identity mapping).
+  private _viewToActual: number[] = [];
+
   // Auto-fitted column widths, keyed by column name. Computed once after data load.
   private _autoWidths = new Map<string, number>();
 
@@ -43,9 +94,14 @@ class GridStore {
   sort = $state<SortSpec | null>(null);
   globalSearch = $state('');
 
-  // Selection
+  // Selection — these can coexist:
+  //  - selectedRow + selectedCol = "cross selection", the cell at the intersection
+  //    is highlighted distinctly.
+  //  - selectedCell is mutually exclusive with row/col selection.
   selectedCell = $state<{ row: number; col: number } | null>(null);
   selectedRange = $state<{ r1: number; c1: number; r2: number; c2: number } | null>(null);
+  selectedRow = $state<number | null>(null);
+  selectedCol = $state<number | null>(null);
 
   // Workers (DuckDB only — CSV is parsed inline in the main thread)
   private _duckWorker: Worker | null = null;
@@ -60,8 +116,9 @@ class GridStore {
   // Column stats cache
   private _statsCache = new Map<number, ColumnStats>();
 
-  // Edit history for in-webview undo / discard
-  private _editHistory: Array<{ row: number; col: number; oldValue: CellValue; newValue: CellValue }> = [];
+  // Edit history for in-webview undo / discard.
+  // Each entry is a strongly-typed action so we can correctly invert it on undo.
+  private _editHistory: EditAction[] = [];
   editCount = $state(0);  // reactive proxy for _editHistory.length
 
   // ── Init ──────────────────────────────────────────────────────────────────
@@ -205,6 +262,7 @@ class GridStore {
   // ── Mutations ─────────────────────────────────────────────────────────────
 
   setCellValue(row: number, col: number, value: CellValue): void {
+    const actualRow = this._actualRowIndex(row);
     const chunkStart = Math.floor(row / CHUNK_SIZE) * CHUNK_SIZE;
     const chunk = this._cache.get(chunkStart);
     let oldValue: CellValue = null;
@@ -215,59 +273,128 @@ class GridStore {
         rowData[col] = value;
       }
     }
-    // Mirror into the master CSV array so undo/discard and re-chunk see it.
-    if (this.fileType === 'csv' && this._csvAllRows[row]) {
-      if (oldValue === null && this._csvAllRows[row][col] !== undefined) {
-        oldValue = this._csvAllRows[row][col];
+    // Mirror into the master CSV array using the *actual* index so the change
+    // survives a re-chunk after filter/sort.
+    if (this.fileType === 'csv' && this._csvAllRows[actualRow]) {
+      if (oldValue === null && this._csvAllRows[actualRow][col] !== undefined) {
+        oldValue = this._csvAllRows[actualRow][col];
       }
-      this._csvAllRows[row][col] = value;
+      this._csvAllRows[actualRow][col] = value;
     }
-    this._editHistory.push({ row, col, oldValue, newValue: value });
+    this._editHistory.push({ kind: 'CELL_EDIT', row: actualRow, col, oldValue, newValue: value });
     this.editCount = this._editHistory.length;
     this.cacheVersion++;
     uiStore.markDirty();
+  }
+
+  // Invert a single action (last-in, first-out) on _csvAllRows + schema.
+  // Does not touch _editHistory or uiStore — the caller manages those.
+  private _revertAction(a: EditAction): void {
+    switch (a.kind) {
+      case 'CELL_EDIT':
+        if (this._csvAllRows[a.row]) this._csvAllRows[a.row][a.col] = a.oldValue;
+        break;
+      case 'ROW_INSERT':
+        // Was inserted at a.row → remove it.
+        if (this._csvAllRows.length > a.row) this._csvAllRows.splice(a.row, 1);
+        this.totalRows = this._csvAllRows.length;
+        break;
+      case 'ROW_DELETE':
+        // Was removed from a.row → put it back.
+        this._csvAllRows.splice(a.row, 0, [...a.deletedRow]);
+        this.totalRows = this._csvAllRows.length;
+        break;
+      case 'COL_INSERT':
+        // Was inserted at a.colIndex → remove the column from every row + schema.
+        for (const row of this._csvAllRows) row.splice(a.colIndex, 1);
+        this.schema = this.schema
+          .filter((_, i) => i !== a.colIndex)
+          .map((c, i) => ({ ...c, index: i }));
+        // Roll back the index shifts that duplicateColumn applied to filters/sort/colors/hidden.
+        this.filters = this.filters.filter(f => f.colIndex !== a.colIndex)
+          .map(f => f.colIndex > a.colIndex ? { ...f, colIndex: f.colIndex - 1 } : f);
+        if (this.sort?.colIndex === a.colIndex) this.sort = null;
+        else if (this.sort && this.sort.colIndex > a.colIndex) this.sort = { ...this.sort, colIndex: this.sort.colIndex - 1 };
+        if (this.colColors.size > 0) {
+          const next = new Map<number, string>();
+          for (const [k, v] of this.colColors) {
+            if (k === a.colIndex) continue;
+            next.set(k > a.colIndex ? k - 1 : k, v);
+          }
+          this.colColors = next;
+        }
+        if (this.hiddenCols.size > 0) {
+          const next = new Set<number>();
+          for (const k of this.hiddenCols) {
+            if (k === a.colIndex) continue;
+            next.add(k > a.colIndex ? k - 1 : k);
+          }
+          this.hiddenCols = next;
+        }
+        break;
+      case 'COL_DELETE': {
+        // Re-insert the deleted column at its old position.
+        for (let i = 0; i < this._csvAllRows.length; i++) {
+          this._csvAllRows[i].splice(a.colIndex, 0, a.deletedValues[i] ?? null);
+        }
+        const restored = { ...a.deletedCol, index: a.colIndex };
+        const updated = [
+          ...this.schema.slice(0, a.colIndex).map(c => ({ ...c })),
+          restored,
+          ...this.schema.slice(a.colIndex).map(c => ({ ...c, index: c.index + 1 })),
+        ];
+        this.schema = updated;
+        // Reverse the index shifts that deleteColumn did on filters/sort/colors/hidden.
+        this.filters = this.filters.map(f => f.colIndex >= a.colIndex ? { ...f, colIndex: f.colIndex + 1 } : f);
+        if (this.sort && this.sort.colIndex >= a.colIndex) this.sort = { ...this.sort, colIndex: this.sort.colIndex + 1 };
+        if (this.colColors.size > 0) {
+          const next = new Map<number, string>();
+          for (const [k, v] of this.colColors) next.set(k >= a.colIndex ? k + 1 : k, v);
+          this.colColors = next;
+        }
+        if (this.hiddenCols.size > 0) {
+          const next = new Set<number>();
+          for (const k of this.hiddenCols) next.add(k >= a.colIndex ? k + 1 : k);
+          this.hiddenCols = next;
+        }
+        break;
+      }
+      case 'COL_RENAME':
+        this.schema = this.schema.map((c, i) => i === a.colIndex ? { ...c, name: a.oldName } : c);
+        if (this.colWidths.has(a.newName)) {
+          const w = this.colWidths.get(a.newName)!;
+          const next = new Map(this.colWidths);
+          next.delete(a.newName);
+          next.set(a.oldName, w);
+          this.colWidths = next;
+        }
+        break;
+    }
   }
 
   undoLastEdit(): boolean {
     const last = this._editHistory.pop();
     if (!last) return false;
     this.editCount = this._editHistory.length;
-
-    const chunkStart = Math.floor(last.row / CHUNK_SIZE) * CHUNK_SIZE;
-    const chunk = this._cache.get(chunkStart);
-    if (chunk) {
-      const rowData = chunk[last.row - chunkStart];
-      if (rowData) rowData[last.col] = last.oldValue;
-    }
-    if (this.fileType === 'csv' && this._csvAllRows[last.row]) {
-      this._csvAllRows[last.row][last.col] = last.oldValue;
-    }
+    this._revertAction(last);
     if (this._editHistory.length === 0) {
       uiStore.isDirty = false;
       uiStore.saved = true;
     }
-    this.cacheVersion++;
+    this._invalidateCache();
     return true;
   }
 
   discardAllEdits(): void {
-    // Walk the history in reverse, restoring each cell to its original value.
+    // Walk the history in reverse, inverting each action.
     while (this._editHistory.length > 0) {
-      const e = this._editHistory.pop()!;
-      const chunkStart = Math.floor(e.row / CHUNK_SIZE) * CHUNK_SIZE;
-      const chunk = this._cache.get(chunkStart);
-      if (chunk) {
-        const rowData = chunk[e.row - chunkStart];
-        if (rowData) rowData[e.col] = e.oldValue;
-      }
-      if (this.fileType === 'csv' && this._csvAllRows[e.row]) {
-        this._csvAllRows[e.row][e.col] = e.oldValue;
-      }
+      const a = this._editHistory.pop()!;
+      this._revertAction(a);
     }
     this.editCount = 0;
     uiStore.isDirty = false;
     uiStore.saved = true;
-    this.cacheVersion++;
+    this._invalidateCache();
   }
 
   clearEditHistory(): void {
@@ -318,6 +445,380 @@ class GridStore {
     if (next.has(colIndex)) next.delete(colIndex);
     else next.add(colIndex);
     this.hiddenCols = next;
+  }
+
+  // ── Row operations ────────────────────────────────────────────────────────
+
+  // Insert/duplicate would put the new row at an unpredictable visual position
+  // when a sort is active (the empty/duplicated row gets re-sorted), confusing the user.
+  // Drop the sort first so the new row appears exactly where it was placed.
+  private _suspendSortForStructuralChange(): void {
+    if (this.sort) this.sort = null;
+  }
+
+  deleteRow(visibleRow: number): void {
+    if (this.fileType !== 'csv') return;
+    const actual = this._actualRowIndex(visibleRow);
+    const removed = this._csvAllRows[actual];
+    if (!removed) return;
+    this._csvAllRows.splice(actual, 1);
+    this.totalRows = this._csvAllRows.length;
+    this._editHistory.push({ kind: 'ROW_DELETE', row: actual, deletedRow: [...removed] });
+    this.editCount = this._editHistory.length;
+    this._invalidateCache();
+    uiStore.markDirty();
+  }
+
+  insertRowAbove(visibleRow: number): void {
+    if (this.fileType !== 'csv') return;
+    this._suspendSortForStructuralChange();
+    const actual = this._actualRowIndex(visibleRow);
+    const empty = new Array(this.schema.length).fill(null) as CellValue[];
+    this._csvAllRows.splice(actual, 0, empty);
+    this.totalRows = this._csvAllRows.length;
+    this._editHistory.push({ kind: 'ROW_INSERT', row: actual, insertedRow: [...empty] });
+    this.editCount = this._editHistory.length;
+    this._invalidateCache();
+    uiStore.markDirty();
+  }
+
+  insertRowBelow(visibleRow: number): void {
+    if (this.fileType !== 'csv') return;
+    this._suspendSortForStructuralChange();
+    const actual = this._actualRowIndex(visibleRow);
+    const empty = new Array(this.schema.length).fill(null) as CellValue[];
+    const at = actual + 1;
+    this._csvAllRows.splice(at, 0, empty);
+    this.totalRows = this._csvAllRows.length;
+    this._editHistory.push({ kind: 'ROW_INSERT', row: at, insertedRow: [...empty] });
+    this.editCount = this._editHistory.length;
+    this._invalidateCache();
+    uiStore.markDirty();
+  }
+
+  duplicateRow(visibleRow: number): void {
+    if (this.fileType !== 'csv') return;
+    this._suspendSortForStructuralChange();
+    const actual = this._actualRowIndex(visibleRow);
+    const src = this._csvAllRows[actual];
+    if (!src) return;
+    const copy = [...src];
+    const at = actual + 1;
+    this._csvAllRows.splice(at, 0, copy);
+    this.totalRows = this._csvAllRows.length;
+    this._editHistory.push({ kind: 'ROW_INSERT', row: at, insertedRow: [...copy] });
+    this.editCount = this._editHistory.length;
+    this._invalidateCache();
+    uiStore.markDirty();
+  }
+
+  copyRowToClipboard(visibleRow: number): void {
+    // Read directly from the chunk cache (works for any file type, not just CSV).
+    const chunkStart = Math.floor(visibleRow / CHUNK_SIZE) * CHUNK_SIZE;
+    const chunk = this._cache.get(chunkStart);
+    const rowData = chunk?.[visibleRow - chunkStart];
+    if (!rowData) return;
+    const header = this.schema.map(c => c.name).join('\t');
+    const line = this.schema.map(c => String(rowData[c.index] ?? '')).join('\t');
+    navigator.clipboard.writeText(header + '\n' + line).catch(() => {});
+  }
+
+  // ── Column operations ─────────────────────────────────────────────────────
+
+  deleteColumn(colIndex: number): void {
+    if (this.fileType !== 'csv') return;
+    const deletedCol = this.schema[colIndex];
+    if (!deletedCol) return;
+    const deletedValues: CellValue[] = this._csvAllRows.map(row => row[colIndex] ?? null);
+    for (const row of this._csvAllRows) row.splice(colIndex, 1);
+    this.schema = this.schema
+      .filter(c => c.index !== colIndex)
+      .map((c, i) => ({ ...c, index: i }));
+    // Drop any filter/sort/color/hide tied to this column (otherwise they reference a phantom index).
+    this.filters = this.filters.filter(f => f.colIndex !== colIndex)
+      .map(f => f.colIndex > colIndex ? { ...f, colIndex: f.colIndex - 1 } : f);
+    if (this.sort?.colIndex === colIndex) this.sort = null;
+    else if (this.sort && this.sort.colIndex > colIndex) this.sort = { ...this.sort, colIndex: this.sort.colIndex - 1 };
+    if (this.colColors.size > 0) {
+      const next = new Map<number, string>();
+      for (const [k, v] of this.colColors) {
+        if (k === colIndex) continue;
+        next.set(k > colIndex ? k - 1 : k, v);
+      }
+      this.colColors = next;
+    }
+    if (this.hiddenCols.size > 0) {
+      const next = new Set<number>();
+      for (const k of this.hiddenCols) {
+        if (k === colIndex) continue;
+        next.add(k > colIndex ? k - 1 : k);
+      }
+      this.hiddenCols = next;
+    }
+    this._editHistory.push({ kind: 'COL_DELETE', colIndex, deletedCol: { ...deletedCol }, deletedValues });
+    this.editCount = this._editHistory.length;
+    this._invalidateCache();
+    uiStore.markDirty();
+  }
+
+  duplicateColumn(colIndex: number): void {
+    if (this.fileType !== 'csv') return;
+    const srcCol = this.schema[colIndex];
+    if (!srcCol) return;
+    let newName = srcCol.name + '_copy';
+    let suffix = 1;
+    const existingNames = new Set(this.schema.map(c => c.name));
+    while (existingNames.has(newName)) {
+      suffix++;
+      newName = srcCol.name + '_copy' + suffix;
+    }
+    const insertedValues: CellValue[] = [];
+    for (const row of this._csvAllRows) {
+      const v = row[colIndex] ?? null;
+      insertedValues.push(v);
+      row.splice(colIndex + 1, 0, v);
+    }
+    const newCol = { ...srcCol, name: newName, index: colIndex + 1 };
+    const updated = [
+      ...this.schema.slice(0, colIndex + 1),
+      newCol,
+      ...this.schema.slice(colIndex + 1).map(c => ({ ...c, index: c.index + 1 })),
+    ];
+    this.schema = updated;
+    // Shift filters/sort/colors/hidden cols whose index is past the insertion point.
+    this.filters = this.filters.map(f => f.colIndex > colIndex ? { ...f, colIndex: f.colIndex + 1 } : f);
+    if (this.sort && this.sort.colIndex > colIndex) this.sort = { ...this.sort, colIndex: this.sort.colIndex + 1 };
+    if (this.colColors.size > 0) {
+      const next = new Map<number, string>();
+      for (const [k, v] of this.colColors) next.set(k > colIndex ? k + 1 : k, v);
+      this.colColors = next;
+    }
+    if (this.hiddenCols.size > 0) {
+      const next = new Set<number>();
+      for (const k of this.hiddenCols) next.add(k > colIndex ? k + 1 : k);
+      this.hiddenCols = next;
+    }
+    this._editHistory.push({ kind: 'COL_INSERT', colIndex: colIndex + 1, insertedCol: { ...newCol }, insertedValues });
+    this.editCount = this._editHistory.length;
+    this._invalidateCache();
+    uiStore.markDirty();
+  }
+
+  renameColumn(colIndex: number, newName: string): boolean {
+    const trimmed = newName.trim();
+    if (!trimmed) return false;
+    const col = this.schema[colIndex];
+    if (!col) return false;
+    if (col.name === trimmed) return false;
+    if (this.schema.some((c, i) => i !== colIndex && c.name === trimmed)) {
+      uiStore.setError(`A column named "${trimmed}" already exists`);
+      return false;
+    }
+    const oldName = col.name;
+    this.schema = this.schema.map((c, i) => i === colIndex ? { ...c, name: trimmed } : c);
+    // Migrate the stored width keyed by name so the new column keeps its width.
+    if (this.colWidths.has(oldName)) {
+      const w = this.colWidths.get(oldName)!;
+      const next = new Map(this.colWidths);
+      next.delete(oldName);
+      next.set(trimmed, w);
+      this.colWidths = next;
+    }
+    this._editHistory.push({ kind: 'COL_RENAME', colIndex, oldName, newName: trimmed });
+    this.editCount = this._editHistory.length;
+    this.cacheVersion++;
+    uiStore.markDirty();
+    return true;
+  }
+
+  copyColumnToClipboard(colIndex: number): void {
+    const header = this.schema[colIndex]?.name ?? `col${colIndex}`;
+    let sourceRows: CellValue[][];
+    if (this._csvAllRows.length > 0) {
+      // If a filter/sort/search is active, mirror the visible order; otherwise use the raw dataset.
+      if (this._viewToActual.length > 0) {
+        sourceRows = this._viewToActual.map(idx => this._csvAllRows[idx]);
+      } else {
+        sourceRows = this._csvAllRows;
+      }
+    } else {
+      // Fallback to whatever is in the cache (Parquet/Arrow/JSON/Excel without full materialisation).
+      sourceRows = [];
+      for (const chunk of this._cache.values()) sourceRows.push(...chunk);
+    }
+    const values = sourceRows.map(row => String(row[colIndex] ?? ''));
+    navigator.clipboard.writeText([header, ...values].join('\n')).catch(() => {});
+  }
+
+  filterByValue(colIndex: number, value: CellValue): void {
+    this.setFilter({ colIndex, op: 'eq', value: value === null ? null : String(value) });
+  }
+
+  // ── Selection ─────────────────────────────────────────────────────────────
+
+  // Picking a single cell clears row/column selection (mutually exclusive).
+  selectCell(row: number, col: number): void {
+    this.selectedCell = { row, col };
+    this.selectedRow = null;
+    this.selectedCol = null;
+  }
+
+  // Row and column selections coexist so the user can see a "cross" at the intersection.
+  // Selecting a row clears any previous single-cell selection.
+  selectRow(row: number): void {
+    this.selectedRow = row;
+    this.selectedCell = null;
+  }
+
+  selectCol(col: number): void {
+    this.selectedCol = col;
+    this.selectedCell = null;
+  }
+
+  clearSelection(): void {
+    this.selectedCell = null;
+    this.selectedRow = null;
+    this.selectedCol = null;
+  }
+
+  // ── Statistics ────────────────────────────────────────────────────────────
+
+  // Returns the in-memory dataset rows when available (CSV/SQLite/Avro/ORC),
+  // null otherwise (for Parquet/Arrow/JSON/Excel which stream from the worker).
+  getAllRowsInMemory(): CellValue[][] | null {
+    return this._csvAllRows.length > 0 ? this._csvAllRows : null;
+  }
+
+  computeColumnStats(colIndex: number): ColumnReport | null {
+    const rows = this.getAllRowsInMemory();
+    if (!rows) return null;
+    const col = this.schema[colIndex];
+    if (!col) return null;
+
+    const total = rows.length;
+    let nulls = 0;
+    const numeric: number[] = [];
+    const valueCounts = new Map<string, number>();
+
+    for (const row of rows) {
+      const v = row[colIndex];
+      if (v === null || v === undefined || v === '') {
+        nulls++;
+        continue;
+      }
+      const key = String(v);
+      valueCounts.set(key, (valueCounts.get(key) ?? 0) + 1);
+      const n = typeof v === 'number' ? v : Number(v);
+      if (!isNaN(n) && isFinite(n)) numeric.push(n);
+    }
+
+    const distinct = valueCounts.size;
+    const top = [...valueCounts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+      .map(([value, count]) => ({ value, count }));
+
+    let numericStats: ColumnReport['numeric'] = undefined;
+    if (numeric.length > 0 && col.inferredType === 'number') {
+      numeric.sort((a, b) => a - b);
+      const sum = numeric.reduce((s, n) => s + n, 0);
+      const mean = sum / numeric.length;
+      const median = numeric.length % 2 === 0
+        ? (numeric[numeric.length / 2 - 1] + numeric[numeric.length / 2]) / 2
+        : numeric[Math.floor(numeric.length / 2)];
+      const variance = numeric.reduce((s, n) => s + (n - mean) ** 2, 0) / numeric.length;
+      const stddev = Math.sqrt(variance);
+      const min = numeric[0];
+      const max = numeric[numeric.length - 1];
+
+      // Histogram: 10 bins between min and max.
+      const BINS = 10;
+      const range = max - min || 1;
+      const binSize = range / BINS;
+      const histogram: { from: number; to: number; count: number }[] = [];
+      for (let i = 0; i < BINS; i++) {
+        histogram.push({ from: min + i * binSize, to: min + (i + 1) * binSize, count: 0 });
+      }
+      for (const n of numeric) {
+        let bin = Math.floor((n - min) / binSize);
+        if (bin >= BINS) bin = BINS - 1;
+        if (bin < 0) bin = 0;
+        histogram[bin].count++;
+      }
+
+      numericStats = { min, max, mean, median, stddev, sum, histogram };
+    }
+
+    return {
+      colIndex,
+      name: col.name,
+      type: col.inferredType,
+      total,
+      nulls,
+      distinct,
+      top,
+      numeric: numericStats,
+    };
+  }
+
+  computeDatasetStats(): DatasetReport | null {
+    const rows = this.getAllRowsInMemory();
+    if (!rows) return null;
+
+    const total = rows.length;
+    const cols = this.schema.length;
+    const totalCells = total * cols;
+    let nullCells = 0;
+
+    const perColumn = this.schema.map(col => {
+      let nulls = 0;
+      const seen = new Set<string>();
+      let numericCount = 0;
+      let sum = 0;
+      let min = Infinity;
+      let max = -Infinity;
+      for (const row of rows) {
+        const v = row[col.index];
+        if (v === null || v === undefined || v === '') {
+          nulls++;
+          continue;
+        }
+        seen.add(String(v));
+        const n = typeof v === 'number' ? v : Number(v);
+        if (!isNaN(n) && isFinite(n)) {
+          numericCount++;
+          sum += n;
+          if (n < min) min = n;
+          if (n > max) max = n;
+        }
+      }
+      nullCells += nulls;
+      const isNumeric = col.inferredType === 'number' && numericCount > 0;
+      return {
+        index: col.index,
+        name: col.name,
+        type: col.inferredType,
+        nulls,
+        nullPct: total === 0 ? 0 : (nulls / total) * 100,
+        distinct: seen.size,
+        mean: isNumeric ? sum / numericCount : undefined,
+        min: isNumeric ? min : undefined,
+        max: isNumeric ? max : undefined,
+      };
+    });
+
+    return {
+      totalRows: total,
+      totalCols: cols,
+      totalCells,
+      nullCells,
+      nullPct: totalCells === 0 ? 0 : (nullCells / totalCells) * 100,
+      typeCounts: this.schema.reduce((acc, c) => {
+        acc[c.inferredType] = (acc[c.inferredType] ?? 0) + 1;
+        return acc;
+      }, {} as Record<string, number>),
+      columns: perColumn,
+    };
   }
 
   setColumnWidth(colName: string, width: number): void {
@@ -429,25 +930,46 @@ class GridStore {
   }
 
   private _serveCsvChunk(startRow: number, endRow: number): void {
-    let rows = this._csvAllRows;
-
-    if (this.filters.length > 0) {
-      rows = rows.filter(row => this.filters.every(f => applyFilter(row, f)));
-    }
-
+    const hasFilter = this.filters.length > 0;
     const q = this.globalSearch.trim().toLowerCase();
-    if (q.length > 0) {
-      rows = rows.filter(row => row.some(cell => String(cell ?? '').toLowerCase().includes(q)));
+    const hasSearch = q.length > 0;
+    const hasSort = !!this.sort;
+
+    if (!hasFilter && !hasSearch && !hasSort) {
+      // Identity mapping — clear the override so _actualRowIndex returns row as-is.
+      this._viewToActual = [];
+      this.filteredRows = this._csvAllRows.length;
+      const sliced = this._csvAllRows.slice(startRow, Math.min(endRow, this._csvAllRows.length));
+      this._storeChunk(startRow, sliced);
+      return;
     }
 
-    if (this.sort) {
-      const { colIndex, direction } = this.sort;
-      rows = [...rows].sort((a, b) => compareValues(a[colIndex], b[colIndex], direction));
+    // Build pairs of (row, actualIndex) so we don't lose the original index after
+    // filter/sort. Critical for row mutations (delete/duplicate/insert) under a filtered view.
+    let pairs: { row: CellValue[]; idx: number }[] = this._csvAllRows.map((row, idx) => ({ row, idx }));
+
+    if (hasFilter) {
+      pairs = pairs.filter(p => this.filters.every(f => applyFilter(p.row, f)));
+    }
+    if (hasSearch) {
+      pairs = pairs.filter(p => p.row.some(cell => String(cell ?? '').toLowerCase().includes(q)));
+    }
+    if (hasSort) {
+      const { colIndex, direction } = this.sort!;
+      pairs = [...pairs].sort((a, b) => compareValues(a.row[colIndex], b.row[colIndex], direction));
     }
 
-    this.filteredRows = rows.length;
-    const sliced = rows.slice(startRow, Math.min(endRow, rows.length));
-    this._storeChunk(startRow, sliced);
+    this._viewToActual = pairs.map(p => p.idx);
+    this.filteredRows = pairs.length;
+    const slicedPairs = pairs.slice(startRow, Math.min(endRow, pairs.length));
+    this._storeChunk(startRow, slicedPairs.map(p => p.row));
+  }
+
+  // Translate a visible row index (the one DataGrid renders) into the actual
+  // index inside _csvAllRows. With no filter/sort/search this is identity.
+  private _actualRowIndex(visibleRow: number): number {
+    if (this._viewToActual.length === 0) return visibleRow;
+    return this._viewToActual[visibleRow] ?? visibleRow;
   }
 
   private _storeChunk(startRow: number, rows: CellValue[][]): void {

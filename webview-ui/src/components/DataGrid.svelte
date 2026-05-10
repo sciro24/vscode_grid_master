@@ -2,6 +2,9 @@
   import { gridStore } from '../stores/grid.svelte.js';
   import { postMessage } from '../bridge/vscode.js';
   import type { CellValue } from '@shared/schema.js';
+  import RowContextMenu from './RowContextMenu.svelte';
+  import ColumnMenu from './ColumnMenu.svelte';
+  import ColumnStatsPanel from './ColumnStatsPanel.svelte';
 
   const ROW_HEIGHT = 26;
   const HEADER_HEIGHT = 32;
@@ -156,14 +159,76 @@
 
   // ── Column colors ─────────────────────────────────────────────────────────
 
-  // Accessed via gridStore.colColors (set by Toolbar)
   function colBgStyle(colIndex: number): string {
     const color = gridStore.colColors.get(colIndex);
     return color ? `background-color: ${color};` : '';
   }
+
+  // True while the user has the column-colour palette enabled.
+  // When on, cells get muted pastels and the border treatment / selection style
+  // need to adapt so the visualisation stays readable.
+  const colouredMode = $derived(gridStore.colColors.size > 0);
+
+  // ── Context menus ─────────────────────────────────────────────────────────
+
+  let rowMenu = $state<{ row: number; x: number; y: number } | null>(null);
+  let colMenu = $state<{ colIndex: number; x: number; y: number } | null>(null);
+  let statsCol = $state<number | null>(null);
+
+  function onRowContextMenu(e: MouseEvent, row: number) {
+    e.preventDefault();
+    colMenu = null;
+    gridStore.selectRow(row);
+    rowMenu = { row, x: e.clientX, y: e.clientY };
+  }
+
+  function onHeaderContextMenu(e: MouseEvent, colIndex: number) {
+    e.preventDefault();
+    rowMenu = null;
+    colMenu = { colIndex, x: e.clientX, y: e.clientY };
+  }
+
+  // ── Selection ─────────────────────────────────────────────────────────────
+
+  function onRowNumClick(row: number) {
+    // Toggle: clicking the same row again clears just the row part of the selection
+    // (keeps the column selection if any, so the cross pivot can still be visible).
+    if (gridStore.selectedRow === row) gridStore.selectedRow = null;
+    else gridStore.selectRow(row);
+  }
+
+  function onHeaderClick(colIndex: number) {
+    if (gridStore.selectedCol === colIndex) gridStore.selectedCol = null;
+    else gridStore.selectCol(colIndex);
+  }
+
+  function onCellClick(row: number, col: number) {
+    gridStore.selectCell(row, col);
+  }
+
+  const selectedRow = $derived(gridStore.selectedRow);
+  const selectedCol = $derived(gridStore.selectedCol);
+  const selectedCell = $derived(gridStore.selectedCell);
+
+  function isRowSelected(row: number): boolean {
+    return selectedRow === row;
+  }
+
+  function isColSelected(col: number): boolean {
+    return selectedCol === col;
+  }
+
+  function isCellSelected(row: number, col: number): boolean {
+    return selectedCell?.row === row && selectedCell?.col === col;
+  }
+
+  // True when both row & column are selected and this cell sits on their intersection.
+  function isCrossPivot(row: number, col: number): boolean {
+    return selectedRow === row && selectedCol === col;
+  }
 </script>
 
-<div class="grid-root" class:is-resizing={resizing !== null}>
+<div class="grid-root" class:is-resizing={resizing !== null} class:is-coloured={colouredMode}>
   <div class="grid-scroller" bind:this={scrollerEl} onscroll={onScroll}>
     <div class="grid-sizer" style="height: {totalHeight + HEADER_HEIGHT}px;">
 
@@ -171,14 +236,17 @@
       <div class="grid-header" style="height: {HEADER_HEIGHT}px;">
         <div class="row-num-cell header-cell">#</div>
         {#each gridStore.visibleSchema as col (col.index)}
+          {@const colSel = isColSelected(col.index)}
           <div
             class="header-cell"
+            class:header-cell-selected={colSel}
             style="width: {colWidth(col.name, col.inferredType)}px; {colBgStyle(col.index)}"
+            oncontextmenu={(e) => onHeaderContextMenu(e, col.index)}
           >
             <button
               class="header-btn"
-              onclick={() => toggleSort(col.index)}
-              title="Click to sort"
+              onclick={() => onHeaderClick(col.index)}
+              title="Click to select column — right-click for sort, filter & more"
             >
               <span class="header-name">{col.name}{sortIndicator(col.index)}</span>
               <span class="header-type">{col.inferredType}</span>
@@ -198,8 +266,17 @@
       <div class="grid-rows" style="transform: translateY({HEADER_HEIGHT + startRow * ROW_HEIGHT}px);">
         {#each Array(endRow - startRow) as _, i}
           {@const row = startRow + i}
-          <div class="grid-row" style="height: {ROW_HEIGHT}px;">
-            <div class="row-num-cell">{row + 1}</div>
+          {@const rowSel = isRowSelected(row)}
+          <div class="grid-row" class:row-selected={rowSel} style="height: {ROW_HEIGHT}px;">
+            <div
+              class="row-num-cell"
+              class:row-num-selected={rowSel}
+              onclick={() => onRowNumClick(row)}
+              oncontextmenu={(e) => onRowContextMenu(e, row)}
+              title="Click to select row — right-click for options"
+              role="button"
+              tabindex="-1"
+            >{row + 1}</div>
             {#each gridStore.visibleSchema as col (col.index)}
               {@const val = (cacheTick, gridStore.getCell(row, col.index))}
               {#if editingCell && editingCell.row === row && editingCell.col === col.index}
@@ -216,7 +293,11 @@
                   class="cell"
                   class:cell-null={isNull(val)}
                   class:cell-number={col.inferredType === 'number'}
+                  class:cell-selected={isCellSelected(row, col.index)}
+                  class:cell-col-selected={isColSelected(col.index)}
+                  class:cell-cross={isCrossPivot(row, col.index)}
                   style="width: {colWidth(col.name, col.inferredType)}px; {colBgStyle(col.index)}"
+                  onclick={() => onCellClick(row, col.index)}
                   ondblclick={() => startEdit(row, col.index)}
                   role="button"
                   tabindex="-1"
@@ -232,6 +313,27 @@
     </div>
   </div>
 </div>
+
+{#if rowMenu}
+  <RowContextMenu
+    row={rowMenu.row}
+    anchor={{ x: rowMenu.x, y: rowMenu.y }}
+    onClose={() => rowMenu = null}
+  />
+{/if}
+
+{#if colMenu}
+  <ColumnMenu
+    colIndex={colMenu.colIndex}
+    anchor={{ x: colMenu.x, y: colMenu.y }}
+    onClose={() => colMenu = null}
+    onShowStats={(idx) => statsCol = idx}
+  />
+{/if}
+
+{#if statsCol !== null}
+  <ColumnStatsPanel colIndex={statsCol} onClose={() => statsCol = null} />
+{/if}
 
 <style>
   .grid-root {
@@ -279,6 +381,16 @@
     border-right: 1px solid var(--gm-border, var(--vscode-panel-border));
     overflow: visible;
     flex-shrink: 0;
+  }
+
+  .header-cell.header-cell-selected {
+    background: var(--vscode-list-activeSelectionBackground, rgba(100, 149, 237, 0.3));
+    box-shadow: inset 0 -2px 0 var(--vscode-focusBorder, #007acc);
+  }
+
+  .header-cell.header-cell-selected .header-btn {
+    color: var(--vscode-list-activeSelectionForeground, var(--gm-fg));
+    font-weight: 700;
   }
 
   .header-btn {
@@ -350,6 +462,34 @@
     filter: brightness(0.95);
   }
 
+  .grid-row.row-selected > .cell {
+    background: var(--vscode-list-activeSelectionBackground, rgba(100, 149, 237, 0.18));
+    color: var(--vscode-list-activeSelectionForeground, inherit);
+  }
+
+  .cell.cell-col-selected {
+    background: var(--vscode-list-activeSelectionBackground, rgba(100, 149, 237, 0.18));
+    color: var(--vscode-list-activeSelectionForeground, inherit);
+  }
+
+  .cell.cell-selected {
+    outline: 2px solid var(--vscode-focusBorder, #007acc);
+    outline-offset: -2px;
+    background: var(--vscode-list-activeSelectionBackground, rgba(100, 149, 237, 0.25));
+  }
+
+  /* Intersection of selected row & column — same family as the rest of the
+     selection (VS Code accent blue) but stronger, so the pivot stands out
+     without breaking the colour scheme. */
+  .grid-row.row-selected > .cell.cell-cross,
+  .cell.cell-cross {
+    background: var(--vscode-list-activeSelectionBackground, rgba(100, 149, 237, 0.55));
+    color: var(--vscode-list-activeSelectionForeground, inherit);
+    font-weight: 700;
+    box-shadow: inset 0 0 0 2px var(--vscode-focusBorder, #007acc);
+    filter: brightness(1.25) saturate(1.15);
+  }
+
   .row-num-cell {
     width: 56px;
     flex-shrink: 0;
@@ -362,6 +502,18 @@
     font-size: 11px;
     background: var(--gm-header-bg, var(--vscode-editorWidget-background));
     user-select: none;
+    cursor: pointer;
+  }
+
+  .row-num-cell:hover {
+    background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.04));
+    color: var(--gm-fg);
+  }
+
+  .row-num-cell.row-num-selected {
+    background: var(--vscode-list-activeSelectionBackground, rgba(100, 149, 237, 0.3));
+    color: var(--vscode-list-activeSelectionForeground, inherit);
+    font-weight: 600;
   }
 
   .cell {
@@ -397,5 +549,64 @@
     font-size: inherit;
     outline: none;
     box-sizing: border-box;
+  }
+
+  /* ── Coloured mode ──────────────────────────────────────────────────────
+     When the user enables column colours, two things change:
+       1. Column separators get a slightly stronger border so the pastels
+          don't bleed into each other visually.
+       2. Selection styles switch from a solid blue overlay (which would mix
+          poorly with pastels and wash out the colour mapping) to an outline
+          + underline treatment that *adds* to the cell without hiding its
+          base colour. */
+
+  .grid-root.is-coloured .cell,
+  .grid-root.is-coloured .header-cell {
+    border-right-color: var(--vscode-panel-border, rgba(255, 255, 255, 0.18));
+    border-right-width: 1px;
+    box-shadow: inset -1px 0 0 0 rgba(0, 0, 0, 0.08);
+  }
+
+  /* Row selection in coloured mode: top + bottom accent bars instead of overlay */
+  .grid-root.is-coloured .grid-row.row-selected > .cell {
+    background: inherit;
+    color: inherit;
+    box-shadow:
+      inset 0 2px 0 0 var(--vscode-focusBorder, #007acc),
+      inset 0 -2px 0 0 var(--vscode-focusBorder, #007acc),
+      inset -1px 0 0 0 rgba(0, 0, 0, 0.08);
+    filter: brightness(1.04);
+  }
+
+  /* Column selection in coloured mode: side accent bars on every cell of the column */
+  .grid-root.is-coloured .cell.cell-col-selected {
+    background: inherit;
+    color: inherit;
+    box-shadow:
+      inset 2px 0 0 0 var(--vscode-focusBorder, #007acc),
+      inset -2px 0 0 0 var(--vscode-focusBorder, #007acc);
+    filter: brightness(1.04);
+  }
+
+  /* Cross pivot in coloured mode: full outline on top of base colour */
+  .grid-root.is-coloured .grid-row.row-selected > .cell.cell-cross,
+  .grid-root.is-coloured .cell.cell-cross {
+    background: inherit;
+    color: var(--vscode-editor-foreground, inherit);
+    font-weight: 700;
+    box-shadow: inset 0 0 0 2px var(--vscode-focusBorder, #007acc);
+    filter: brightness(1.18) saturate(1.2);
+  }
+
+  /* Header of selected column in coloured mode: keep pastel background, just bolder bottom bar */
+  .grid-root.is-coloured .header-cell.header-cell-selected {
+    background: inherit;
+    box-shadow: inset 0 -3px 0 var(--vscode-focusBorder, #007acc);
+  }
+
+  /* Selected single cell in coloured mode keeps the focus outline,
+     but no overlay tint that would obscure the column colour */
+  .grid-root.is-coloured .cell.cell-selected {
+    background: inherit;
   }
 </style>

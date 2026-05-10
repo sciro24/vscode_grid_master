@@ -2,9 +2,11 @@
   import { gridStore } from '../stores/grid.svelte.js';
   import { uiStore } from '../stores/ui.svelte.js';
   import { postMessage } from '../bridge/vscode.js';
+  import DatasetStatsPanel from './DatasetStatsPanel.svelte';
 
   let searchInput = $state('');
   let showColumnPanel = $state(false);
+  let showDatasetStats = $state(false);
 
   function handleSearch(e: Event) {
     const q = (e.target as HTMLInputElement).value;
@@ -36,6 +38,15 @@
     gridStore.clearFilters();
   }
 
+  // Clicking anywhere in the toolbar (background or non-interactive area)
+  // clears the row/column/cell selection — same behaviour as VS Code.
+  // Buttons and the search input have their own onclick handlers that stop
+  // propagation here only if needed; otherwise it's harmless to also clear
+  // selection when pressing a toolbar button (selection isn't tied to it).
+  function onToolbarClick() {
+    gridStore.clearSelection();
+  }
+
   const hasFilters = $derived(gridStore.filters.length > 0);
   const fileName = $derived(gridStore.fileName);
   const isDirty = $derived(uiStore.isDirty);
@@ -43,7 +54,7 @@
   const canUndo = $derived(gridStore.editCount > 0);
 </script>
 
-<div class="toolbar">
+<div class="toolbar" onclick={onToolbarClick} role="presentation">
   <div class="toolbar-left">
     <span class="file-name" title={fileName}>
       {fileName}
@@ -86,6 +97,17 @@
       <!-- Palette icon -->
       <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
         <path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm0 1.5a6.5 6.5 0 0 1 6.5 6.5c0 1.1-.9 2-2 2a2 2 0 0 1-1.41-.59l-.01-.01A2 2 0 0 0 9.5 9a2 2 0 0 0-2 2 .5.5 0 0 1-.5.5A6.5 6.5 0 0 1 1.5 8 6.5 6.5 0 0 1 8 1.5zM5 5a1 1 0 1 0 0 2 1 1 0 0 0 0-2zm6 0a1 1 0 1 0 0 2 1 1 0 0 0 0-2zM6.5 3a1 1 0 1 0 0 2 1 1 0 0 0 0-2zm3 0a1 1 0 1 0 0 2 1 1 0 0 0 0-2z"/>
+      </svg>
+    </button>
+
+    <button
+      class="btn btn-ghost"
+      onclick={() => showDatasetStats = true}
+      title="Dataset statistics — distribution and per-column summary"
+    >
+      <!-- Bar chart icon -->
+      <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+        <path d="M2 13h2v-3H2v3zm3.5 0h2V7h-2v6zm3.5 0h2V4H9v9zm3.5 0h2V1h-2v12zM1 14.5h14V16H1v-1.5z"/>
       </svg>
     </button>
 
@@ -140,6 +162,10 @@
     {/if}
   </div>
 </div>
+
+{#if showDatasetStats}
+  <DatasetStatsPanel onClose={() => showDatasetStats = false} />
+{/if}
 
 <style>
   .toolbar {

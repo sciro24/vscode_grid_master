@@ -1,42 +1,77 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import { gridStore } from '../stores/grid.svelte.js';
-  import type { InferredType } from '@shared/schema.js';
 
   interface Props {
     colIndex: number;
     anchor: { x: number; y: number };
     onClose: () => void;
+    onShowStats?: (colIndex: number) => void;
   }
 
-  let { colIndex, anchor, onClose }: Props = $props();
+  let { colIndex, anchor, onClose, onShowStats }: Props = $props();
 
   const col = $derived(gridStore.schema[colIndex]);
-
-  function sortAsc() { gridStore.setSort({ colIndex, direction: 'asc' }); onClose(); }
-  function sortDesc() { gridStore.setSort({ colIndex, direction: 'desc' }); onClose(); }
-  function clearSort() { gridStore.setSort(null); onClose(); }
-
-  function filterByCol() {
-    gridStore.setFilter({ colIndex, op: 'contains', value: '' });
-    onClose();
-  }
-
-  function hideCol() { gridStore.toggleColumnVisibility(colIndex); onClose(); }
-
-  function setType(type: InferredType) {
-    const updated = gridStore.schema.map(c =>
-      c.index === colIndex ? { ...c, userOverrideType: type } : c
-    );
-    gridStore.updateSchema(updated);
-    onClose();
-  }
-
+  const isCsv = $derived(gridStore.fileType === 'csv');
   const isSorted = $derived(gridStore.sort?.colIndex === colIndex);
   const sortDir = $derived(gridStore.sort?.direction);
 
+  // Inline rename state
+  let renaming = $state(false);
+  let renameValue = $state('');
+  let renameInputEl: HTMLInputElement | null = $state(null);
+
+  function act(fn: () => void) { fn(); onClose(); }
+
+  function showStats() {
+    onShowStats?.(colIndex);
+    onClose();
+  }
+
+  // Track whether the user is interacting with the rename input. While true,
+  // the global click-outside handler must not close the menu.
+  let suppressOutsideClose = $state(false);
+
+  async function startRename(e?: MouseEvent) {
+    // Stop the click from bubbling to the window listener that may close the menu.
+    e?.stopPropagation();
+    suppressOutsideClose = true;
+    renameValue = col?.name ?? '';
+    renaming = true;
+    await tick();   // wait for the input to actually be mounted
+    renameInputEl?.focus();
+    renameInputEl?.select();
+  }
+
+  function commitRename() {
+    if (!renaming) return;
+    suppressOutsideClose = false;
+    const trimmed = renameValue.trim();
+    const currentName = col?.name ?? '';
+    if (trimmed === '' || trimmed === currentName) {
+      // Nothing to do; just exit edit mode and keep the menu open.
+      renaming = false;
+      return;
+    }
+    const ok = gridStore.renameColumn(colIndex, trimmed);
+    renaming = false;
+    if (ok) onClose();
+  }
+
+  function cancelRename() {
+    suppressOutsideClose = false;
+    renaming = false;
+  }
+
+  function onRenameKey(e: KeyboardEvent) {
+    e.stopPropagation();
+    if (e.key === 'Enter') { e.preventDefault(); commitRename(); }
+    else if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
+  }
+
   function handleClickOutside(e: MouseEvent) {
-    const target = e.target as Element;
-    if (!target.closest('.column-menu')) onClose();
+    if (suppressOutsideClose) return;
+    if (!(e.target as Element).closest('.column-menu')) onClose();
   }
 </script>
 
@@ -48,17 +83,42 @@
   role="menu"
   tabindex="-1"
 >
-  <div class="menu-header">{col?.name ?? `Column ${colIndex}`}</div>
+  <div class="menu-header">
+    {#if renaming}
+      <input
+        class="rename-input"
+        bind:this={renameInputEl}
+        bind:value={renameValue}
+        onkeydown={onRenameKey}
+        onblur={commitRename}
+        onclick={(ev) => ev.stopPropagation()}
+        onmousedown={(ev) => ev.stopPropagation()}
+        placeholder="Column name"
+        aria-label="Rename column"
+      />
+    {:else}
+      {col?.name ?? `Column ${colIndex}`}
+    {/if}
+  </div>
+
+  {#if isCsv && !renaming}
+    <div class="menu-section">
+      <button class="menu-item" onclick={(ev) => startRename(ev)}>
+        <span class="menu-icon">✎</span> Rename column
+      </button>
+    </div>
+    <div class="menu-divider"></div>
+  {/if}
 
   <div class="menu-section">
-    <button class="menu-item" onclick={sortAsc} class:active={isSorted && sortDir === 'asc'}>
+    <button class="menu-item" onclick={() => act(() => gridStore.setSort({ colIndex, direction: 'asc' }))} class:active={isSorted && sortDir === 'asc'}>
       <span class="menu-icon">↑</span> Sort A → Z
     </button>
-    <button class="menu-item" onclick={sortDesc} class:active={isSorted && sortDir === 'desc'}>
+    <button class="menu-item" onclick={() => act(() => gridStore.setSort({ colIndex, direction: 'desc' }))} class:active={isSorted && sortDir === 'desc'}>
       <span class="menu-icon">↓</span> Sort Z → A
     </button>
     {#if isSorted}
-      <button class="menu-item" onclick={clearSort}>
+      <button class="menu-item" onclick={() => act(() => gridStore.setSort(null))}>
         <span class="menu-icon">✕</span> Clear sort
       </button>
     {/if}
@@ -67,32 +127,37 @@
   <div class="menu-divider"></div>
 
   <div class="menu-section">
-    <button class="menu-item" onclick={filterByCol}>
+    <button class="menu-item" onclick={() => act(() => gridStore.setFilter({ colIndex, op: 'contains', value: '' }))}>
       <span class="menu-icon">⊟</span> Filter by this column
     </button>
+    <button class="menu-item" onclick={() => act(() => gridStore.copyColumnToClipboard(colIndex))}>
+      <span class="menu-icon">⎘</span> Copy column
+    </button>
+    <button class="menu-item" onclick={showStats}>
+      <span class="menu-icon">∑</span> Column statistics
+    </button>
   </div>
 
-  <div class="menu-divider"></div>
-
-  <div class="menu-section">
-    <div class="menu-label">Treat as type</div>
-    {#each (['string', 'number', 'boolean', 'date'] as InferredType[]) as type}
-      <button
-        class="menu-item"
-        onclick={() => setType(type)}
-        class:active={col?.userOverrideType === type || (!col?.userOverrideType && col?.inferredType === type)}
-      >
-        <span class="type-badge type-{type}">{type}</span>
+  {#if isCsv}
+    <div class="menu-divider"></div>
+    <div class="menu-section">
+      <button class="menu-item" onclick={() => act(() => gridStore.duplicateColumn(colIndex))}>
+        <span class="menu-icon">⿻</span> Duplicate column
       </button>
-    {/each}
-  </div>
+    </div>
+  {/if}
 
   <div class="menu-divider"></div>
 
   <div class="menu-section">
-    <button class="menu-item danger" onclick={hideCol}>
+    <button class="menu-item" onclick={() => act(() => gridStore.toggleColumnVisibility(colIndex))}>
       <span class="menu-icon">○</span> Hide column
     </button>
+    {#if isCsv}
+      <button class="menu-item danger" onclick={() => act(() => gridStore.deleteColumn(colIndex))}>
+        <span class="menu-icon">✕</span> Delete column
+      </button>
+    {/if}
   </div>
 </div>
 
@@ -117,18 +182,28 @@
     text-transform: uppercase;
     letter-spacing: 0.05em;
     border-bottom: 1px solid var(--gm-border);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .rename-input {
+    width: 100%;
+    background: var(--vscode-input-background);
+    color: var(--vscode-input-foreground);
+    border: 1px solid var(--vscode-focusBorder, #007acc);
+    border-radius: 3px;
+    padding: 3px 6px;
+    font-size: 12px;
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: 0;
+    outline: none;
+    box-sizing: border-box;
   }
 
   .menu-section {
     padding: 4px 0;
-  }
-
-  .menu-label {
-    padding: 4px 12px 2px;
-    font-size: 11px;
-    color: var(--gm-fg-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
   }
 
   .menu-item {
@@ -162,16 +237,4 @@
     background: var(--gm-border);
     margin: 2px 0;
   }
-
-  .type-badge {
-    padding: 1px 6px;
-    border-radius: 3px;
-    font-size: 11px;
-    font-family: var(--vscode-editor-font-family, monospace);
-  }
-
-  .type-string  { background: var(--gm-type-string-bg);  color: var(--gm-type-string-fg); }
-  .type-number  { background: var(--gm-type-number-bg);  color: var(--gm-type-number-fg); }
-  .type-boolean { background: var(--gm-type-bool-bg);    color: var(--gm-type-bool-fg); }
-  .type-date    { background: var(--gm-type-date-bg);    color: var(--gm-type-date-fg); }
 </style>
