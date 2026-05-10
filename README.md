@@ -5,7 +5,7 @@
 <p align="center">
   <img src="assets/before.png" alt="Without Grid Master" width="48%" />
   &nbsp;&nbsp;
-  <img src="assets/after-2.png" alt="With Grid Master" width="48%" />
+  <img src="assets/after2.png" alt="With Grid Master" width="48%" />
 </p>
 
 
