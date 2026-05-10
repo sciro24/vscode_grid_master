@@ -2,11 +2,15 @@
 
 **The fast data grid for VS Code.** Open CSV, Parquet, Arrow, Excel, JSON, SQLite, Avro and ORC files as an interactive spreadsheet — sort, filter, search, edit and color-code columns without ever leaving the editor.
 
-<p align="center">
-  <img src="assets/before.png" alt="Without Grid Master" width="48%" />
-  &nbsp;&nbsp;
-  <img src="assets/after2.png" alt="With Grid Master" width="48%" />
-</p>
+<table align="center" width="100%"><tr>
+  <td align="center" width="48%"><strong>Without Grid Master</strong></td>
+  <td width="4%"></td>
+  <td align="center" width="48%"><strong>With Grid Master</strong></td>
+</tr><tr>
+  <td align="center"><img src="assets/before.png" alt="Without Grid Master" width="100%" /></td>
+  <td></td>
+  <td align="center"><img src="assets/after2.png" alt="With Grid Master" width="100%" /></td>
+</tr></table>
 
 
 ---
@@ -72,6 +76,27 @@
   Or for video on GitHub: replace the <img> above with:
     <video src="assets/demo.mp4" autoplay loop muted width="80%"></video>
   Note: VS Marketplace and Open VSX do not play <video> — use GIF for broadest compatibility.
+-->
+
+---
+
+## Details
+
+<table align="center" width="100%"><tr>
+  <td align="center" width="48%"><strong>Sort</strong></td>
+  <td width="4%"></td>
+  <td align="center" width="48%"><strong>Filter &amp; color</strong></td>
+</tr><tr>
+  <td align="center"><img src="assets/sort.png" alt="Sort columns" width="100%" /></td>
+  <td></td>
+  <td align="center"><img src="assets/filter.png" alt="Filter and color columns" width="100%" /></td>
+</tr></table>
+
+<!--
+  DETAIL SCREENSHOTS: place two PNG files in the assets/ folder:
+    assets/screenshot-sort.png     (e.g. a column sorted ascending/descending)
+    assets/screenshot-filter.png  (e.g. filter panel open + column colors active)
+  Recommended: 1280×800 px, PNG, ≤ 300 KB each.
 -->
 
 ---
