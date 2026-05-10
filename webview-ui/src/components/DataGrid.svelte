@@ -202,13 +202,19 @@
     else gridStore.selectCol(colIndex);
   }
 
-  function onCellClick(row: number, col: number) {
-    gridStore.selectCell(row, col);
+  function onCellClick(e: MouseEvent, row: number, col: number) {
+    if (e.shiftKey) {
+      gridStore.extendRange(row, col);
+    } else {
+      gridStore.selectCell(row, col);
+    }
   }
 
   const selectedRow = $derived(gridStore.selectedRow);
   const selectedCol = $derived(gridStore.selectedCol);
   const selectedCell = $derived(gridStore.selectedCell);
+  const selectedRange = $derived(gridStore.selectedRange);
+  const freezeFirstCol = $derived(gridStore.freezeFirstColumn);
 
   function isRowSelected(row: number): boolean {
     return selectedRow === row;
@@ -222,11 +228,137 @@
     return selectedCell?.row === row && selectedCell?.col === col;
   }
 
+  function isInRange(row: number, col: number): boolean {
+    if (!selectedRange) return false;
+    return row >= selectedRange.r1 && row <= selectedRange.r2
+      && col >= selectedRange.c1 && col <= selectedRange.c2;
+  }
+
   // True when both row & column are selected and this cell sits on their intersection.
   function isCrossPivot(row: number, col: number): boolean {
     return selectedRow === row && selectedCol === col;
   }
+
+  // ── Keyboard navigation ────────────────────────────────────────────────────
+
+  function activeCell(): { row: number; col: number } | null {
+    return gridStore.selectedCell ?? gridStore.selectionAnchor;
+  }
+
+  function clampRow(r: number): number {
+    return Math.max(0, Math.min(gridStore.filteredRows - 1, r));
+  }
+  function clampCol(c: number): number {
+    const cols = gridStore.visibleSchema;
+    if (cols.length === 0) return 0;
+    return Math.max(0, Math.min(cols.length - 1, c));
+  }
+
+  // Map between visibleSchema position and the underlying schema index.
+  function visiblePosFromColIdx(colIdx: number): number {
+    const cols = gridStore.visibleSchema;
+    const i = cols.findIndex(c => c.index === colIdx);
+    return i < 0 ? 0 : i;
+  }
+  function colIdxFromVisiblePos(pos: number): number {
+    const cols = gridStore.visibleSchema;
+    const p = clampCol(pos);
+    return cols[p]?.index ?? 0;
+  }
+
+  // Scroll the grid so the row at `r` is comfortably in view.
+  function scrollRowIntoView(r: number) {
+    if (!scrollerEl) return;
+    const top = HEADER_HEIGHT + r * ROW_HEIGHT;
+    const bottom = top + ROW_HEIGHT;
+    const viewTop = scrollerEl.scrollTop;
+    const viewBottom = viewTop + scrollerEl.clientHeight;
+    if (top < viewTop + HEADER_HEIGHT) scrollerEl.scrollTop = Math.max(0, top - HEADER_HEIGHT);
+    else if (bottom > viewBottom) scrollerEl.scrollTop = bottom - scrollerEl.clientHeight;
+  }
+
+  function onKeyDown(e: KeyboardEvent) {
+    // Don't intercept while editing a cell — the inline input owns keys.
+    if (editingCell) return;
+    // Don't intercept when the focus is inside an input/textarea/contenteditable
+    // (search box, rename input, etc.) — those handle their own keys.
+    const t = e.target as HTMLElement | null;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+
+    // Cmd/Ctrl + C → copy current selection
+    if ((e.metaKey || e.ctrlKey) && (e.key === 'c' || e.key === 'C')) {
+      const txt = gridStore.copySelectionToClipboard();
+      if (txt !== null) e.preventDefault();
+      return;
+    }
+
+    const cur = activeCell();
+    if (!cur) return;
+
+    let { row, col } = cur;
+    let handled = true;
+
+    switch (e.key) {
+      case 'ArrowUp':    row = clampRow(row - 1); break;
+      case 'ArrowDown':  row = clampRow(row + 1); break;
+      case 'ArrowLeft': {
+        const p = visiblePosFromColIdx(col);
+        col = colIdxFromVisiblePos(p - 1);
+        break;
+      }
+      case 'ArrowRight':
+      case 'Tab': {
+        const p = visiblePosFromColIdx(col);
+        col = colIdxFromVisiblePos(p + 1);
+        break;
+      }
+      case 'Home': {
+        if (e.ctrlKey || e.metaKey) row = 0;
+        col = colIdxFromVisiblePos(0);
+        break;
+      }
+      case 'End': {
+        if (e.ctrlKey || e.metaKey) row = clampRow(gridStore.filteredRows - 1);
+        col = colIdxFromVisiblePos(gridStore.visibleSchema.length - 1);
+        break;
+      }
+      case 'PageUp': {
+        const pageRows = Math.max(1, Math.floor(viewportHeight / ROW_HEIGHT) - 1);
+        row = clampRow(row - pageRows);
+        break;
+      }
+      case 'PageDown': {
+        const pageRows = Math.max(1, Math.floor(viewportHeight / ROW_HEIGHT) - 1);
+        row = clampRow(row + pageRows);
+        break;
+      }
+      case 'Enter': {
+        startEdit(row, col);
+        break;
+      }
+      case 'Escape': {
+        gridStore.clearSelection();
+        break;
+      }
+      default:
+        handled = false;
+    }
+
+    if (handled) {
+      e.preventDefault();
+      if (e.key !== 'Enter' && e.key !== 'Escape') {
+        if (e.shiftKey && (e.key.startsWith('Arrow') || e.key === 'Home' || e.key === 'End' || e.key === 'PageUp' || e.key === 'PageDown')) {
+          gridStore.extendRange(row, col);
+        } else {
+          gridStore.selectCell(row, col);
+        }
+        scrollRowIntoView(row);
+      }
+    }
+  }
 </script>
+
+<svelte:window onkeydown={onKeyDown} />
 
 <div class="grid-root" class:is-resizing={resizing !== null} class:is-coloured={colouredMode}>
   <div class="grid-scroller" bind:this={scrollerEl} onscroll={onScroll}>
@@ -234,12 +366,14 @@
 
       <!-- Sticky header -->
       <div class="grid-header" style="height: {HEADER_HEIGHT}px;">
-        <div class="row-num-cell header-cell">#</div>
-        {#each gridStore.visibleSchema as col (col.index)}
+        <div class="row-num-cell header-cell row-num-frozen">#</div>
+        {#each gridStore.visibleSchema as col, colPos (col.index)}
           {@const colSel = isColSelected(col.index)}
+          {@const isFrozen = freezeFirstCol && colPos === 0}
           <div
             class="header-cell"
             class:header-cell-selected={colSel}
+            class:col-frozen={isFrozen}
             style="width: {colWidth(col.name, col.inferredType)}px; {colBgStyle(col.index)}"
             oncontextmenu={(e) => onHeaderContextMenu(e, col.index)}
           >
@@ -269,7 +403,7 @@
           {@const rowSel = isRowSelected(row)}
           <div class="grid-row" class:row-selected={rowSel} style="height: {ROW_HEIGHT}px;">
             <div
-              class="row-num-cell"
+              class="row-num-cell row-num-frozen"
               class:row-num-selected={rowSel}
               onclick={() => onRowNumClick(row)}
               oncontextmenu={(e) => onRowContextMenu(e, row)}
@@ -277,8 +411,9 @@
               role="button"
               tabindex="-1"
             >{row + 1}</div>
-            {#each gridStore.visibleSchema as col (col.index)}
+            {#each gridStore.visibleSchema as col, colPos (col.index)}
               {@const val = (cacheTick, gridStore.getCell(row, col.index))}
+              {@const isFrozen = freezeFirstCol && colPos === 0}
               {#if editingCell && editingCell.row === row && editingCell.col === col.index}
                 <input
                   class="cell-input"
@@ -296,8 +431,10 @@
                   class:cell-selected={isCellSelected(row, col.index)}
                   class:cell-col-selected={isColSelected(col.index)}
                   class:cell-cross={isCrossPivot(row, col.index)}
+                  class:cell-in-range={isInRange(row, col.index)}
+                  class:col-frozen={isFrozen}
                   style="width: {colWidth(col.name, col.inferredType)}px; {colBgStyle(col.index)}"
-                  onclick={() => onCellClick(row, col.index)}
+                  onclick={(e) => onCellClick(e, row, col.index)}
                   ondblclick={() => startEdit(row, col.index)}
                   role="button"
                   tabindex="-1"
@@ -514,6 +651,43 @@
     background: var(--vscode-list-activeSelectionBackground, rgba(100, 149, 237, 0.3));
     color: var(--vscode-list-activeSelectionForeground, inherit);
     font-weight: 600;
+  }
+
+  /* ── Freeze panes ────────────────────────────────────────────────────────
+     The row-number column (56px wide) is always frozen so the row index stays
+     visible while scrolling horizontally. The optional first-data-column freeze
+     is toggled via gridStore.freezeFirstColumn and offsets by 56px (+1 border).
+     Use a slightly stronger right-edge shadow on the rightmost frozen column
+     to visually separate frozen from scrolling content. */
+  .row-num-cell.row-num-frozen {
+    position: sticky;
+    left: 0;
+    z-index: 3;
+  }
+  /* Header row-num must beat regular header z-index too */
+  .grid-header .row-num-cell.row-num-frozen {
+    z-index: 4;
+  }
+
+  .header-cell.col-frozen,
+  .cell.col-frozen {
+    position: sticky;
+    left: 56px;
+    z-index: 1;
+    background: var(--gm-cell-bg, var(--vscode-editor-background));
+    box-shadow: 2px 0 0 0 var(--vscode-focusBorder, #007acc);
+  }
+  .grid-header .header-cell.col-frozen {
+    z-index: 3;
+    background: var(--gm-header-bg, var(--vscode-editorWidget-background));
+  }
+
+  /* Range selection rectangle. Each cell in the rectangle gets a subtle tint;
+     the active cell on top of the range still shows its outline.
+     Lower specificity than .cell-cross / .cell-selected so they win. */
+  .cell.cell-in-range {
+    background: var(--vscode-list-activeSelectionBackground, rgba(100, 149, 237, 0.18));
+    color: var(--vscode-list-activeSelectionForeground, inherit);
   }
 
   .cell {

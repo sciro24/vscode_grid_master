@@ -100,10 +100,18 @@ class GridStore {
   //  - selectedRow + selectedCol = "cross selection", the cell at the intersection
   //    is highlighted distinctly.
   //  - selectedCell is mutually exclusive with row/col selection.
+  //  - selectedRange = anchor + extent, set by click then shift-click.
   selectedCell = $state<{ row: number; col: number } | null>(null);
   selectedRange = $state<{ r1: number; c1: number; r2: number; c2: number } | null>(null);
   selectedRow = $state<number | null>(null);
   selectedCol = $state<number | null>(null);
+
+  // Anchor of an in-progress range selection (the first click of a click → shift-click sequence).
+  selectionAnchor = $state<{ row: number; col: number } | null>(null);
+
+  // Freeze the first data column so it stays visible while scrolling horizontally.
+  // The row-number column is always frozen (sticky left:0).
+  freezeFirstColumn = $state(false);
 
   // Workers (DuckDB only — CSV is parsed inline in the main thread)
   private _duckWorker: Worker | null = null;
@@ -710,29 +718,108 @@ class GridStore {
 
   // ── Selection ─────────────────────────────────────────────────────────────
 
-  // Picking a single cell clears row/column selection (mutually exclusive).
+  // Picking a single cell clears row/column selection (mutually exclusive)
+  // and the previous range; sets a new anchor for a future shift-click.
   selectCell(row: number, col: number): void {
     this.selectedCell = { row, col };
     this.selectedRow = null;
     this.selectedCol = null;
+    this.selectedRange = null;
+    this.selectionAnchor = { row, col };
   }
 
   // Row and column selections coexist so the user can see a "cross" at the intersection.
-  // Selecting a row clears any previous single-cell selection.
+  // Selecting a row clears any previous single-cell selection or range.
   selectRow(row: number): void {
     this.selectedRow = row;
     this.selectedCell = null;
+    this.selectedRange = null;
+    this.selectionAnchor = null;
   }
 
   selectCol(col: number): void {
     this.selectedCol = col;
     this.selectedCell = null;
+    this.selectedRange = null;
+    this.selectionAnchor = null;
   }
 
   clearSelection(): void {
     this.selectedCell = null;
     this.selectedRow = null;
     this.selectedCol = null;
+    this.selectedRange = null;
+    this.selectionAnchor = null;
+  }
+
+  // Range selection: first click sets the anchor + selectedCell; a follow-up
+  // shift-click (extendRange) builds the rectangle from anchor → target.
+  extendRange(toRow: number, toCol: number): void {
+    const anchor = this.selectionAnchor ?? this.selectedCell;
+    if (!anchor) {
+      // No anchor yet → behave like a single-cell click.
+      this.selectCell(toRow, toCol);
+      this.selectionAnchor = { row: toRow, col: toCol };
+      return;
+    }
+    this.selectedCell = null;
+    this.selectedRow = null;
+    this.selectedCol = null;
+    this.selectedRange = {
+      r1: Math.min(anchor.row, toRow),
+      c1: Math.min(anchor.col, toCol),
+      r2: Math.max(anchor.row, toRow),
+      c2: Math.max(anchor.col, toCol),
+    };
+  }
+
+  // Build a TSV string from the current selection (range, single cell, full row, or full column).
+  // Returns null when there's nothing selected.
+  copySelectionToClipboard(): string | null {
+    const { selectedRange, selectedCell, selectedRow, selectedCol } = this;
+
+    if (selectedRange) {
+      const { r1, c1, r2, c2 } = selectedRange;
+      const lines: string[] = [];
+      for (let r = r1; r <= r2; r++) {
+        const cells: string[] = [];
+        for (let c = c1; c <= c2; c++) cells.push(this._readCellForCopy(r, c));
+        lines.push(cells.join('\t'));
+      }
+      const tsv = lines.join('\n');
+      navigator.clipboard.writeText(tsv).catch(() => {});
+      return tsv;
+    }
+
+    if (selectedCell) {
+      const tsv = this._readCellForCopy(selectedCell.row, selectedCell.col);
+      navigator.clipboard.writeText(tsv).catch(() => {});
+      return tsv;
+    }
+
+    if (selectedRow !== null) {
+      this.copyRowToClipboard(selectedRow);
+      return ''; // already wrote
+    }
+
+    if (selectedCol !== null) {
+      this.copyColumnToClipboard(selectedCol);
+      return '';
+    }
+
+    return null;
+  }
+
+  private _readCellForCopy(row: number, col: number): string {
+    const v = this.getCell(row, col);
+    if (v === null || v === undefined) return '';
+    return typeof v === 'boolean' ? (v ? 'true' : 'false') : String(v);
+  }
+
+  // ── Freeze panes ──────────────────────────────────────────────────────────
+
+  toggleFreezeFirstColumn(): void {
+    this.freezeFirstColumn = !this.freezeFirstColumn;
   }
 
   // ── Statistics ────────────────────────────────────────────────────────────

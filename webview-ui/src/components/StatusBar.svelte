@@ -8,15 +8,23 @@
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 
-  function formatRowCount(n: number): string {
-    return n.toLocaleString();
+  function formatNum(n: number): string {
+    return n.toLocaleString('en-US');
   }
+
+  function truncate(s: string, max = 40): string {
+    if (s.length <= max) return s;
+    return s.slice(0, max - 1) + '…';
+  }
+
+  // Read cacheVersion so cell-value reads in the template re-evaluate when the cache mutates.
+  const cacheTick = $derived(gridStore.cacheVersion);
 
   const isFiltered = $derived(gridStore.filters.length > 0 || gridStore.globalSearch.length > 0);
   const rowDisplay = $derived(
     isFiltered
-      ? `${formatRowCount(gridStore.filteredRows)} of ${formatRowCount(gridStore.totalRows)} rows`
-      : `${formatRowCount(gridStore.totalRows)} rows`
+      ? `${formatNum(gridStore.filteredRows)} of ${formatNum(gridStore.totalRows)} rows`
+      : `${formatNum(gridStore.totalRows)} rows`
   );
 
   const colCount = $derived(gridStore.visibleSchema.length);
@@ -28,9 +36,34 @@
   );
 
   const cell = $derived(gridStore.selectedCell);
+  const range = $derived(gridStore.selectedRange);
+  const selectedRow = $derived(gridStore.selectedRow);
+  const selectedCol = $derived(gridStore.selectedCol);
   const fileSize = $derived(formatBytes(gridStore.totalBytes));
   const fileType = $derived(gridStore.fileType.toUpperCase());
   const isDirty = $derived(uiStore.isDirty);
+
+  // Resolve the active cell value, name and address.
+  const activeAddress = $derived.by(() => {
+    if (!cell) return null;
+    const colName = gridStore.schema[cell.col]?.name ?? `col${cell.col + 1}`;
+    return { row: cell.row + 1, col: cell.col + 1, colName };
+  });
+
+  const activeValue = $derived.by(() => {
+    if (!cell) return null;
+    void cacheTick;  // force recompute on cache mutation
+    const v = gridStore.getCell(cell.row, cell.col);
+    if (v === null || v === undefined) return '∅';
+    return truncate(String(v));
+  });
+
+  const rangeInfo = $derived.by(() => {
+    if (!range) return null;
+    const rows = range.r2 - range.r1 + 1;
+    const cols = range.c2 - range.c1 + 1;
+    return { rows, cols, total: rows * cols };
+  });
 </script>
 
 <div class="status-bar">
@@ -43,13 +76,30 @@
     <span class="status-item muted">{fileSize}</span>
   </div>
 
-  <div class="status-right">
-    {#if cell !== null}
+  <div class="status-center">
+    {#if rangeInfo}
+      <span class="status-item">
+        <strong>{formatNum(rangeInfo.rows)}×{formatNum(rangeInfo.cols)}</strong>
+        <span class="muted">range · {formatNum(rangeInfo.total)} cells</span>
+      </span>
+    {:else if activeAddress && activeValue !== null}
+      <span class="status-item">
+        <span class="muted">R{formatNum(activeAddress.row)}</span>
+        <span class="status-sep">·</span>
+        <span class="muted">{truncate(activeAddress.colName, 20)}</span>
+        <span class="status-sep">→</span>
+        <strong class="status-value">{activeValue}</strong>
+      </span>
+    {:else if selectedRow !== null}
+      <span class="status-item muted">Row {formatNum(selectedRow + 1)} selected</span>
+    {:else if selectedCol !== null}
       <span class="status-item muted">
-        Row {(cell.row + 1).toLocaleString()}, Col {cell.col + 1}
+        Column “{truncate(gridStore.schema[selectedCol]?.name ?? '', 24)}” selected
       </span>
     {/if}
+  </div>
 
+  <div class="status-right">
     {#if isDirty}
       <span class="status-badge dirty-badge">Unsaved</span>
     {:else if gridStore.totalRows > 0}
@@ -60,9 +110,9 @@
 
 <style>
   .status-bar {
-    display: flex;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
     align-items: center;
-    justify-content: space-between;
     padding: 0 12px;
     height: 22px;
     background: var(--gm-statusbar-bg);
@@ -70,18 +120,46 @@
     flex-shrink: 0;
     font-size: 11px;
     color: var(--gm-fg-muted);
+    gap: 12px;
   }
 
   .status-left,
+  .status-center,
   .status-right {
     display: flex;
     align-items: center;
     gap: 6px;
+    min-width: 0;
   }
 
-  .status-item { white-space: nowrap; }
-  .status-item.muted { color: var(--gm-fg-subtle); }
-  .status-sep { color: var(--gm-border); }
+  .status-center {
+    justify-content: center;
+    overflow: hidden;
+  }
+
+  .status-right {
+    justify-self: end;
+  }
+
+  .status-item {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+
+  .status-item.muted, .muted { color: var(--gm-fg-subtle); }
+  .status-sep { color: var(--gm-border); padding: 0 2px; }
+
+  .status-value {
+    color: var(--gm-fg);
+    font-family: var(--vscode-editor-font-family, monospace);
+    max-width: 28ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: inline-block;
+    vertical-align: bottom;
+  }
 
   .status-badge {
     padding: 1px 5px;

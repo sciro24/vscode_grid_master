@@ -1,5 +1,21 @@
 # Grid Master
 
+[![VS Marketplace Version](https://img.shields.io/visual-studio-marketplace/v/DiegoScirocco.grid-master?style=flat-square&logo=visualstudiocode&logoColor=white&label=Marketplace&color=007ACC)](https://marketplace.visualstudio.com/items?itemName=DiegoScirocco.grid-master)
+[![VS Marketplace Installs](https://img.shields.io/visual-studio-marketplace/i/DiegoScirocco.grid-master?style=flat-square&logo=visualstudiocode&logoColor=white&label=Installs&color=007ACC)](https://marketplace.visualstudio.com/items?itemName=DiegoScirocco.grid-master)
+[![VS Marketplace Rating](https://img.shields.io/visual-studio-marketplace/r/DiegoScirocco.grid-master?style=flat-square&logo=visualstudiocode&logoColor=white&label=Rating&color=007ACC)](https://marketplace.visualstudio.com/items?itemName=DiegoScirocco.grid-master&ssr=false#review-details)
+[![Open VSX](https://img.shields.io/open-vsx/v/DiegoScirocco/grid-master?style=flat-square&logo=eclipseide&logoColor=white&label=Open%20VSX&color=C160EF)](https://open-vsx.org/extension/DiegoScirocco/grid-master)
+[![License: MIT](https://img.shields.io/github/license/sciro24/vscode_grid_master?style=flat-square&color=brightgreen)](https://github.com/sciro24/vscode_grid_master/blob/main/LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/sciro24/vscode_grid_master?style=flat-square&logo=github&color=ffb86c)](https://github.com/sciro24/vscode_grid_master/stargazers)
+
+[![Svelte 5](https://img.shields.io/badge/Svelte-5-FF3E00?style=flat-square&logo=svelte&logoColor=white)](https://svelte.dev/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Apache Arrow](https://img.shields.io/badge/Apache%20Arrow-WASM-1e6091?style=flat-square&logo=apache&logoColor=white)](https://arrow.apache.org/)
+[![Parquet](https://img.shields.io/badge/Parquet-WASM-2A6DB4?style=flat-square&logo=apacheparquet&logoColor=white)](https://parquet.apache.org/)
+[![SheetJS](https://img.shields.io/badge/Excel-SheetJS-217346?style=flat-square&logo=microsoftexcel&logoColor=white)](https://sheetjs.com/)
+[![SQLite](https://img.shields.io/badge/SQLite-sql.js-003B57?style=flat-square&logo=sqlite&logoColor=white)](https://sql.js.org/)
+[![100% offline](https://img.shields.io/badge/100%25-offline-success?style=flat-square)](https://github.com/sciro24/vscode_grid_master#privacy)
+[![No telemetry](https://img.shields.io/badge/no-telemetry-success?style=flat-square)](https://github.com/sciro24/vscode_grid_master#privacy)
+
 **The fast data grid for VS Code.** Open CSV, Parquet, Arrow, Excel, JSON, SQLite, Avro and ORC files as an interactive spreadsheet — sort, filter, search, edit and color-code columns without ever leaving the editor.
 
 **Without Grid Master**
@@ -48,6 +64,9 @@
 - **Click a row number** to select the entire row — right-click for a row context menu (insert above/below, duplicate, delete, copy).
 - **Click a column header** to select the whole column — right-click for the full column menu.
 - **Cross selection** — select a row *and* a column together; the cell at their intersection is highlighted distinctly so you can quickly read the value at any pivot.
+- **Range selection** — click a cell, then **shift-click** another to select a rectangle. **Ctrl/Cmd + C** copies the range as TSV (paste straight into Excel, Numbers or another spreadsheet).
+- **Keyboard navigation** — arrow keys, Tab, Home/End, PageUp/PageDown, **Enter** to start editing, **Escape** to cancel/clear; hold **Shift** while moving to extend the range.
+- **Freeze first column** — toolbar toggle keeps the first data column (and the row numbers) anchored on screen while you scroll horizontally through wide datasets.
 - **Click a cell** to focus it; **double-click** to edit inline.
 
 ### Editing
@@ -69,7 +88,8 @@
 - **Dataset overview** — total rows / columns / cells, null density, type distribution and a per-column summary table. One click on the chart icon in the toolbar.
 
 ### Persistence & privacy
-- **Sidecar** — column widths and hidden columns are saved to a tiny `.gridmaster.json` file next to your data. Reopen and pick up where you left off.
+- **Sidecar** — column widths, hidden columns, active filters, sort, palette and rename history are saved to a tiny `.gridmaster.json` file next to your data. Reopen the file and pick up exactly where you left off.
+- **Live status bar** — the bar at the bottom shows file type and size, total / filtered / visible rows and columns, the active cell address with its value, and the size of the current range selection.
 - **100% offline** — files are never uploaded. No telemetry, no network requests. Parquet and Arrow WASM are bundled inside the extension.
 
 ---
@@ -141,6 +161,14 @@
 | SQLite | Extension host | sql.js WASM; multi-table quick-pick |
 | Avro | Extension host | avsc decoder |
 | ORC | Extension host | python3 -m pyorc subprocess |
+
+---
+
+## Privacy
+
+Grid Master is **100% offline**. Files never leave your machine. There is no telemetry, no analytics and no network requests of any kind. The Parquet and Arrow runtimes (`parquet-wasm`, `apache-arrow`) are bundled as WebAssembly inside the extension itself, so even the WASM modules are local. SQLite, Avro and ORC are decoded in the extension host (Node.js) without any external service.
+
+If you want to verify: open the extension's webview developer tools and watch the Network panel — it stays empty.
 
 ---
 
