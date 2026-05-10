@@ -2,11 +2,13 @@
 
 **The fast data grid for VS Code.** Open CSV, Parquet, Arrow, Excel, JSON, SQLite, Avro and ORC files as an interactive spreadsheet — sort, filter, search, edit and color-code columns without ever leaving the editor.
 
-<p align="center">
-  <img src="assets/before.png" alt="Without Grid Master" width="48%" />
-  &nbsp;&nbsp;
-  <img src="assets/after.png" alt="With Grid Master" width="48%" />
-</p>
+**Without Grid Master**
+
+![Without Grid Master](https://raw.githubusercontent.com/sciro24/vscode_grid_master/main/assets/before.png)
+
+**With Grid Master**
+
+![With Grid Master](https://raw.githubusercontent.com/sciro24/vscode_grid_master/main/assets/after.png)
 
 
 ---
@@ -63,7 +65,7 @@
 ## See it in action
 
 <p align="center">
-  <img src="assets/demo.gif" alt="Grid Master demo" width="80%" />
+  <img src="https://raw.githubusercontent.com/sciro24/vscode_grid_master/main/assets/demo.gif" alt="Grid Master demo" width="80%" />
 </p>
 
 
@@ -72,9 +74,9 @@
 ## Details
 
 <p align="center">
-  <img src="assets/sort.png" alt="Sort columns" width="48%" />
+  <img src="https://raw.githubusercontent.com/sciro24/vscode_grid_master/main/assets/sort.png" alt="Sort columns" width="48%" />
   &nbsp;&nbsp;
-  <img src="assets/filter.png" alt="Filter and color columns" width="48%" />
+  <img src="https://raw.githubusercontent.com/sciro24/vscode_grid_master/main/assets/filter.png" alt="Filter and color columns" width="48%" />
 </p>
 
 
