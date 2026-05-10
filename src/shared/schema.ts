@@ -44,8 +44,14 @@ export interface SidecarData {
   columnOverrides: Record<string, InferredType>; // col name → type
   bookmarks: Bookmark[];
   columnWidths: Record<string, number>;         // col name → px
-  hiddenColumns: string[];
+  hiddenColumns: string[];                      // col names that are hidden
   pinnedColumns: { left: string[]; right: string[] };
+  /** Saved filters keyed by column name (so they survive reorder/rename via name match). */
+  filters?: Array<{ column: string; op: FilterOp; value: string | number | null }>;
+  /** True if the column-colour palette is currently active. */
+  colorsActive?: boolean;
+  /** Sort by column name + direction; null/undefined → no saved sort. */
+  sort?: { column: string; direction: 'asc' | 'desc' } | null;
 }
 
 export interface Bookmark {

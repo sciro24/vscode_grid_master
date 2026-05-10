@@ -15,7 +15,17 @@
   }
 
   function handleSave() {
-    postMessage({ type: 'SAVE' });
+    if (gridStore.fileType === 'csv') {
+      const content = gridStore.serializeCsv();
+      if (content === null) return;
+      // Host writes the bytes and replies with SAVE_ACK; we optimistically clear
+      // the edit history so the dirty indicator updates immediately.
+      postMessage({ type: 'SAVE_DATA', payload: { content } });
+    } else {
+      // Non-CSV formats: edits live in-memory only. Just notify the host so it
+      // can clear its dirty flag (no real write-back yet).
+      postMessage({ type: 'SAVE' });
+    }
     gridStore.clearEditHistory();
   }
 

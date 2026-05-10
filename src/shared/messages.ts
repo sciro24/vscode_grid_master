@@ -76,12 +76,18 @@ export type WebviewMessage =
   | { type: 'EDIT';             payload: EditPayload }
   | { type: 'BATCH_EDIT';       payload: BatchEditPayload }
   | { type: 'SAVE' }
+  | { type: 'SAVE_DATA';        payload: SaveDataPayload }
   | { type: 'UNDO' }
   | { type: 'REDO' }
   | { type: 'EXPORT';           payload: ExportPayload }
   | { type: 'REQUEST_STATS';    payload: StatsRequestPayload }
   | { type: 'SAVE_SIDECAR';     payload: SaveSidecarPayload }
   | { type: 'UPDATE_DELIMITER'; payload: UpdateDelimiterPayload };
+
+export interface SaveDataPayload {
+  /** Serialized text content the host should write to the document URI. */
+  content: string;
+}
 
 export interface ChunkRequestPayload {
   requestId: string;

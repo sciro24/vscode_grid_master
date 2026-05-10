@@ -45,6 +45,9 @@ export function setupMessageHandler(): () => void {
 
       case 'SAVE_ACK':
         uiStore.setSaved(msg.payload.success);
+        if (!msg.payload.success && msg.payload.error) {
+          uiStore.setError(`Save failed: ${msg.payload.error}`);
+        }
         break;
 
       case 'EDIT_ACK':

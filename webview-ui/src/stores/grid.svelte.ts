@@ -3,6 +3,8 @@ import type { InitPayload, ChunkPayload, EditAckPayload, ColumnStatsPayload } fr
 import type { DuckDbWorkerIn, DuckDbWorkerOut } from '../workers/duckdb.worker.js';
 import { CHUNK_SIZE, MAX_CHUNKS_IN_MEMORY } from '@shared/constants.js';
 import { uiStore } from './ui.svelte.js';
+import Papa from 'papaparse';
+import { postMessage } from '../bridge/vscode.js';
 
 // LRU chunk cache: rowStart → rows
 type ChunkCache = Map<number, CellValue[][]>;
@@ -128,9 +130,25 @@ class GridStore {
     this.fileName = payload.fileName;
     this.totalBytes = payload.totalBytes;
     this.schema = payload.schema;
+    // The sidecar is stored now but applied later, *after* the schema is fully
+    // populated (which happens when CSV / raw-rows arrive, or when the worker
+    // posts READY for binary formats). _applySidecar relies on schema names
+    // to map saved hidden-cols/filters/sort back to the current indices.
     if (payload.sidecar) {
       this.sidecar = payload.sidecar;
-      this._applySidecar(payload.sidecar);
+      if (payload.schema.length > 0) {
+        // INIT already had schema (rare but possible) → apply right away.
+        this._applySidecar(payload.sidecar);
+      }
+    }
+  }
+
+  // Called by the entry points that populate `schema` for real
+  // (receiveCsvData, receiveRawRows, the worker READY handler) so we can
+  // restore hidden columns / filters / sort / palette once the schema is known.
+  private _applyPendingSidecar(): void {
+    if (this.sidecar && this.schema.length > 0) {
+      this._applySidecar(this.sidecar);
     }
   }
 
@@ -174,7 +192,10 @@ class GridStore {
     this.filteredRows = allRows.length;
     this._csvAllRows = allRows;
     this._computeAutoWidths(schema, allRows);
+    this._applyPendingSidecar();
     this._storeChunk(0, allRows.slice(0, CHUNK_SIZE));
+    // Ensure the chunk reflects any sidecar-restored filter/sort.
+    if (this.filters.length > 0 || this.sort) this._invalidateCache();
   }
 
   // Sample first N rows + header to estimate optimal column widths.
@@ -400,6 +421,32 @@ class GridStore {
   clearEditHistory(): void {
     this._editHistory = [];
     this.editCount = 0;
+    uiStore.isDirty = false;
+    uiStore.saved = true;
+  }
+
+  // Serialise the full dataset back to CSV/TSV text, preserving the rename/insert/
+  // delete history that's already baked into _csvAllRows + this.schema.
+  // Returns null when called for a non-CSV file type (the host won't write).
+  serializeCsv(): string | null {
+    if (this.fileType !== 'csv') return null;
+    const headers = this.schema.map(c => c.name);
+    // Build plain rows aligned to the current column order (handles deletes/duplicates).
+    const rows = this._csvAllRows.map(row =>
+      this.schema.map(c => {
+        const v = row[c.index];
+        if (v === null || v === undefined) return '';
+        // Booleans → 'true'/'false'; numbers/strings → String() — keep raw, no locale grouping.
+        return typeof v === 'boolean' ? (v ? 'true' : 'false') : String(v);
+      })
+    );
+    const delimiter = (this.fileName.toLowerCase().endsWith('.tsv')) ? '\t' : ',';
+    return Papa.unparse({ fields: headers, data: rows }, {
+      delimiter,
+      newline: '\n',
+      quotes: false,        // only quote when needed (PapaParse decides per-cell)
+      skipEmptyLines: false,
+    });
   }
 
   updateSchema(schema: ColumnSchema[]): void {
@@ -416,24 +463,29 @@ class GridStore {
       this.filters = [...this.filters, filter];
     }
     this._invalidateCache();
+    this.persistSidecar();
   }
 
   removeFilter(colIndex: number): void {
     this.filters = this.filters.filter(f => f.colIndex !== colIndex);
     this._invalidateCache();
+    this.persistSidecar();
   }
 
   clearFilters(): void {
     this.filters = [];
     this._invalidateCache();
+    this.persistSidecar();
   }
 
   setSort(sort: SortSpec | null): void {
     this.sort = sort;
     this._invalidateCache();
+    this.persistSidecar();
   }
 
   setGlobalSearch(query: string): void {
+    // Volatile (per-session) search — not persisted.
     this.globalSearch = query;
     this._invalidateCache();
   }
@@ -445,6 +497,7 @@ class GridStore {
     if (next.has(colIndex)) next.delete(colIndex);
     else next.add(colIndex);
     this.hiddenCols = next;
+    this.persistSidecar();
   }
 
   // ── Row operations ────────────────────────────────────────────────────────
@@ -628,6 +681,7 @@ class GridStore {
     this.editCount = this._editHistory.length;
     this.cacheVersion++;
     uiStore.markDirty();
+    this.persistSidecar();
     return true;
   }
 
@@ -823,15 +877,18 @@ class GridStore {
 
   setColumnWidth(colName: string, width: number): void {
     this.colWidths = new Map(this.colWidths).set(colName, width);
+    this.persistSidecar();
   }
 
   setColColors(colors: Map<number, string>): void {
     this.colColors = colors;
+    this.persistSidecar();
   }
 
   toggleColColors(): void {
     if (this.colColors.size > 0) {
       this.colColors = new Map();
+      this.persistSidecar();
       return;
     }
     // Muted pastel palette — good contrast on both light and dark VS Code themes.
@@ -854,6 +911,7 @@ class GridStore {
       next.set(col.index, PALETTE[col.index % PALETTE.length]);
     }
     this.colColors = next;
+    this.persistSidecar();
   }
 
   get visibleSchema(): ColumnSchema[] {
@@ -894,7 +952,9 @@ class GridStore {
     this.filteredRows = rows.length;
     this._csvAllRows = rows;
     this._computeAutoWidths(schema, rows);
+    this._applyPendingSidecar();
     this._storeChunk(0, rows.slice(0, CHUNK_SIZE));
+    if (this.filters.length > 0 || this.sort) this._invalidateCache();
     uiStore.setLoading(false);
   }
 
@@ -996,6 +1056,7 @@ class GridStore {
         this.schema = msg.payload.schema;
         this.totalRows = msg.payload.totalRows;
         this.filteredRows = msg.payload.totalRows;
+        this._applyPendingSidecar();
         this._requestChunk(0, CHUNK_SIZE);
         uiStore.setLoading(false);
         break;
@@ -1019,9 +1080,112 @@ class GridStore {
   }
 
   private _applySidecar(sidecar: SidecarData): void {
-    for (const [name, width] of Object.entries(sidecar.columnWidths)) {
-      this.colWidths.set(name, width);
+    this._applyingSidecar = true;
+    try {
+      // Column widths — keyed by name, applied directly.
+      for (const [name, width] of Object.entries(sidecar.columnWidths ?? {})) {
+        this.colWidths.set(name, width);
+      }
+
+      // Build a name → index lookup once for the rest of the restore work.
+      const nameToIdx = new Map<string, number>();
+      for (const c of this.schema) nameToIdx.set(c.name, c.index);
+
+      // Hidden columns (saved as names, restored by name match).
+      if (sidecar.hiddenColumns?.length) {
+        const hidden = new Set<number>();
+        for (const name of sidecar.hiddenColumns) {
+          const idx = nameToIdx.get(name);
+          if (idx !== undefined) hidden.add(idx);
+        }
+        this.hiddenCols = hidden;
+      }
+
+      // Saved filters: only keep those whose column still exists.
+      if (sidecar.filters?.length) {
+        const restored: FilterSpec[] = [];
+        for (const f of sidecar.filters) {
+          const idx = nameToIdx.get(f.column);
+          if (idx === undefined) continue;
+          restored.push({ colIndex: idx, op: f.op, value: f.value as FilterSpec['value'] });
+        }
+        if (restored.length) this.filters = restored;
+      }
+
+      // Saved sort.
+      if (sidecar.sort) {
+        const idx = nameToIdx.get(sidecar.sort.column);
+        if (idx !== undefined) {
+          this.sort = { colIndex: idx, direction: sidecar.sort.direction };
+        }
+      }
+
+      // Column colours active flag — re-apply the palette using the same logic
+      // as the user-toggle path so the colour mapping is identical.
+      if (sidecar.colorsActive) {
+        this.toggleColColors();
+      }
+    } finally {
+      this._applyingSidecar = false;
     }
+  }
+
+  // Build a SidecarData snapshot from the current store state.
+  // Persistence is opt-in via `_persistSidecar()` — callers decide when to write.
+  private _buildSidecar(): SidecarData {
+    const idxToName = new Map<number, string>();
+    for (const c of this.schema) idxToName.set(c.index, c.name);
+
+    const columnWidths: Record<string, number> = {};
+    for (const [name, w] of this.colWidths) columnWidths[name] = w;
+
+    const hiddenColumns: string[] = [];
+    for (const idx of this.hiddenCols) {
+      const name = idxToName.get(idx);
+      if (name) hiddenColumns.push(name);
+    }
+
+    const filters = this.filters
+      .map(f => {
+        const name = idxToName.get(f.colIndex);
+        if (!name) return null;
+        return { column: name, op: f.op, value: f.value };
+      })
+      .filter((x): x is { column: string; op: FilterSpec['op']; value: FilterSpec['value'] } => x !== null);
+
+    const sortName = this.sort ? idxToName.get(this.sort.colIndex) : undefined;
+
+    return {
+      version: 1,
+      columnOverrides: this.sidecar?.columnOverrides ?? {},
+      bookmarks: this.sidecar?.bookmarks ?? [],
+      columnWidths,
+      hiddenColumns,
+      pinnedColumns: this.sidecar?.pinnedColumns ?? { left: [], right: [] },
+      filters,
+      colorsActive: this.colColors.size > 0,
+      sort: sortName ? { column: sortName, direction: this.sort!.direction } : null,
+    };
+  }
+
+  // Debounced persistence: callers invoke this after every UI mutation that
+  // affects the sidecar; we coalesce a burst into a single host roundtrip.
+  // The host writes .gridmaster.json next to the data file.
+  private _sidecarSaveTimer: number | null = null;
+  private _applyingSidecar = false;
+
+  persistSidecar(): void {
+    // Skip while restoring from disk — we'd just rewrite what we just read.
+    if (this._applyingSidecar) return;
+    if (this._sidecarSaveTimer !== null) {
+      clearTimeout(this._sidecarSaveTimer);
+    }
+    this._sidecarSaveTimer = setTimeout(() => {
+      this._sidecarSaveTimer = null;
+      const sidecar = this._buildSidecar();
+      this.sidecar = sidecar;
+      postMessage({ type: 'SAVE_SIDECAR', payload: { sidecar } });
+    }, 300) as unknown as number;
   }
 }
 

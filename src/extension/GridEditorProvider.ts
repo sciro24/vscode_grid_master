@@ -163,6 +163,20 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
         send({ type: 'SAVE_ACK', payload: { success: true } });
         break;
 
+      case 'SAVE_DATA': {
+        // The webview owns the canonical _csvAllRows + schema after structural
+        // edits, so it serializes and we just write the bytes.
+        try {
+          const bytes = new TextEncoder().encode(msg.payload.content);
+          await GridEditorProvider._fileReader.writeFile(document.uri, bytes);
+          document.clearPatches();
+          send({ type: 'SAVE_ACK', payload: { success: true } });
+        } catch (e) {
+          send({ type: 'SAVE_ACK', payload: { success: false, error: String(e) } });
+        }
+        break;
+      }
+
       case 'UNDO':
         await vscode.commands.executeCommand('undo');
         break;
