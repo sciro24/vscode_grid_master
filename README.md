@@ -3,18 +3,11 @@
 **The fast data grid for VS Code.** Open CSV, Parquet, Arrow, Excel, JSON, SQLite, Avro and ORC files as an interactive spreadsheet — sort, filter, search, edit and color-code columns without ever leaving the editor.
 
 <p align="center">
-  <img src="assets/screenshot-1.png" alt="Grid Master — data grid view" width="48%" />
+  <img src="assets/before.png" alt="Without Grid Master" width="48%" />
   &nbsp;&nbsp;
-  <img src="assets/screenshot-2.png" alt="Grid Master — filter and column tools" width="48%" />
+  <img src="assets/after-2.png" alt="With Grid Master" width="48%" />
 </p>
 
-<!--
-  SCREENSHOTS: place two PNG files in the assets/ folder:
-    assets/screenshot-1.png   (e.g. the main grid with a large Parquet file open)
-    assets/screenshot-2.png   (e.g. filter panel, column colors, or inline edit)
-  Recommended: 1280×800 px, PNG, ≤ 300 KB each.
-  They render side-by-side here on GitHub and on both the VS Marketplace and Open VSX listing pages.
--->
 
 ---
 
