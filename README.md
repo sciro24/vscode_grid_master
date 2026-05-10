@@ -6,13 +6,13 @@
 
 <p align="center">
   <a href="https://marketplace.visualstudio.com/items?itemName=DiegoScirocco.grid-master">
-    <img src="https://img.shields.io/visual-studio-marketplace/v/DiegoScirocco.grid-master?style=flat-square&logo=visual-studio-code&logoColor=3778C6&label=Marketplace" alt="VS Marketplace">
+    <img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fmarketplace.visualstudio.com%2F_apis%2Fpublic%2Fgallery%2Fextensionquery&query=%24.results%5B0%5D.extensions%5B0%5D.versions%5B0%5D.version&method=post&body=%7B%22filters%22%3A%5B%7B%22criteria%22%3A%5B%7B%22filterType%22%3A7%2C%22value%22%3A%22DiegoScirocco.grid-master%22%7D%5D%7D%5D%2C%22flags%22%3A103%7D&headers=Content-Type%3Aapplication%2Fjson&style=flat-square&logo=visualstudiocode&logoColor=3778C6&label=Marketplace&color=3778C6" alt="VS Marketplace">
   </a>
   <a href="https://open-vsx.org/extension/DiegoScirocco/grid-master">
     <img src="https://img.shields.io/open-vsx/v/DiegoScirocco/grid-master?style=flat-square&logo=eclipseide&logoColor=white&label=Open%20VSX&color=C160EF" alt="Open VSX">
   </a>
-  <a href="https://marketplace.visualstudio.com/items?itemName=DiegoScirocco.grid-master">
-    <img src="https://img.shields.io/visual-studio-marketplace/i/DiegoScirocco.grid-master?style=flat-square&color=blueviolet&label=Installs" alt="Installs">
+  <a href="https://open-vsx.org/extension/DiegoScirocco/grid-master">
+    <img src="https://img.shields.io/open-vsx/dt/DiegoScirocco/grid-master?style=flat-square&color=blueviolet&label=Installs" alt="Installs">
   </a>
   <a href="https://github.com/sciro24/vscode_grid_master/blob/main/LICENSE">
     <img src="https://img.shields.io/github/license/sciro24/vscode_grid_master?style=flat-square&color=brightgreen" alt="License">
@@ -22,7 +22,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/100%25-offline-success?style=flat-square" alt="100% offline">
   <img src="https://img.shields.io/badge/no-telemetry-success?style=flat-square" alt="No telemetry">
-  <img src="https://img.shields.io/visual-studio-marketplace/size/DiegoScirocco.grid-master?style=flat-square&label=size" alt="Extension Size">
+  <img src="https://img.shields.io/github/repo-size/sciro24/vscode_grid_master?style=flat-square&label=repo%20size" alt="Repo Size">
 </p>
 
 <p align="center">
