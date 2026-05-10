@@ -69,8 +69,9 @@ jobs:
             echo "Scanning commits in ${RANGE}"
           fi
 
-          # Get commit subjects + bodies in the range.
-          COMMITS=$(git log "$RANGE" --pretty=format:'%s%n%b%n---END---')
+          # Get commit subjects + bodies, excluding any commit that contains [skip release].
+          COMMITS=$(git log "$RANGE" --pretty=format:'%s%n%b%n---END---' | \
+            awk '/\[skip release\]/{skip=1} /---END---/{if(!skip)print; skip=0; next} !skip{print}')
           echo "$COMMITS"
 
           BUMP=""
@@ -86,11 +87,6 @@ jobs:
           # PATCH: any commit starting with "fix:" or "perf:"
           elif echo "$COMMITS" | grep -qE '^(fix|perf)(\([^)]+\))?:'; then
             BUMP="patch"
-          fi
-
-          # Honour explicit skip directive
-          if echo "$COMMITS" | grep -q '\[skip release\]'; then
-            BUMP=""
           fi
 
           if [ -z "$BUMP" ]; then
