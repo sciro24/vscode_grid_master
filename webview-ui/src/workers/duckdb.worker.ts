@@ -6,6 +6,7 @@ import init, { readParquet } from 'parquet-wasm/esm/parquet_wasm.js';
 import * as XLSX from 'xlsx';
 import type { CellValue, ColumnSchema, FilterSpec, SortSpec, InferredType } from '@shared/schema.js';
 import { CHUNK_SIZE } from '@shared/constants.js';
+import { applyFilter, compareValues } from '@shared/filterUtils.js';
 
 let _parquetInited = false;
 
@@ -385,38 +386,6 @@ function handleGetChunk(payload: {
   const sliced = rows.slice(startRow, Math.min(endRow, rows.length));
 
   post({ type: 'CHUNK', payload: { requestId, rows: sliced, startRow, endRow: startRow + sliced.length, filteredTotal } });
-}
-
-// ── Filter / sort helpers ─────────────────────────────────────────────────────
-
-function applyFilter(row: CellValue[], f: FilterSpec): boolean {
-  const cell = row[f.colIndex];
-  const val = f.value;
-  switch (f.op) {
-    case 'eq':           return cell == val;
-    case 'neq':          return cell != val;
-    case 'contains':     return String(cell ?? '').toLowerCase().includes(String(val).toLowerCase());
-    case 'not_contains': return !String(cell ?? '').toLowerCase().includes(String(val).toLowerCase());
-    case 'gt':           return Number(cell) > Number(val);
-    case 'lt':           return Number(cell) < Number(val);
-    case 'gte':          return Number(cell) >= Number(val);
-    case 'lte':          return Number(cell) <= Number(val);
-    case 'regex':        try { return new RegExp(String(val), 'i').test(String(cell ?? '')); } catch { return false; }
-    case 'is_null':      return cell === null;
-    case 'is_not_null':  return cell !== null;
-    default:             return true;
-  }
-}
-
-function compareValues(a: CellValue, b: CellValue, dir: 'asc' | 'desc'): number {
-  const aNum = Number(a), bNum = Number(b);
-  let cmp: number;
-  if (!isNaN(aNum) && !isNaN(bNum)) {
-    cmp = aNum - bNum;
-  } else {
-    cmp = String(a ?? '').localeCompare(String(b ?? ''));
-  }
-  return dir === 'asc' ? cmp : -cmp;
 }
 
 function post(msg: DuckDbWorkerOut): void {

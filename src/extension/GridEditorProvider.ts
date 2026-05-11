@@ -158,10 +158,16 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
         break;
       }
 
-      case 'SAVE':
-        await this._saveDocument(document, new vscode.CancellationTokenSource().token);
-        send({ type: 'SAVE_ACK', payload: { success: true } });
+      case 'SAVE': {
+        const cts = new vscode.CancellationTokenSource();
+        try {
+          await this._saveDocument(document, cts.token);
+          send({ type: 'SAVE_ACK', payload: { success: true } });
+        } finally {
+          cts.dispose();
+        }
         break;
+      }
 
       case 'SAVE_DATA': {
         // The webview owns the canonical _csvAllRows + schema after structural
@@ -271,7 +277,7 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
         });
 
         panel.webview.postMessage({ type: '__RAW_CSV__', payload: { text, totalBytes } });
-        return;
+        // LOADING:false is sent by the webview after it finishes parsing CSV inline.
       } else if (document.fileType === 'json') {
         const bytes = await GridEditorProvider._fileReader.readAll(document.uri);
         const ext = path.extname(document.uri.fsPath).toLowerCase();
@@ -296,7 +302,7 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
           type: '__RAW_BINARY__',
           payload: { base64, fileType: 'json', jsonFormat: isNdjson ? 'ndjson' : 'json', duckBundles },
         });
-        return;
+        send({ type: 'LOADING', payload: { active: false } });
       } else {
         // excel is a single-buffer binary format handled in the webview worker
         const isSingleBinary = document.fileType === 'excel';
@@ -321,6 +327,7 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
             type: '__RAW_BINARY__',
             payload: { base64, fileType: document.fileType, duckBundles },
           });
+          send({ type: 'LOADING', payload: { active: false } });
         } else {
           // parquet / arrow — check for partitioned directory (Spark-style).
           // Use the stat already obtained at the top of _sendInit.
@@ -385,10 +392,9 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
               payload: { base64Parts: parts, fileType: document.fileType, duckBundles },
             });
           }
+          send({ type: 'LOADING', payload: { active: false } });
         }
       }
-
-      send({ type: 'LOADING', payload: { active: false } });
     } catch (e) {
       send({ type: 'ERROR', payload: { code: 'READ_ERROR', message: String(e) } });
     }
@@ -535,25 +541,26 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
 
     const filePath = document.uri.fsPath;
 
-    // Inline Python script: reads ORC with pyorc and outputs NDJSON to stdout.
-    const pyScript = `
-import sys, json, pyorc
-reader = pyorc.Reader(open(${JSON.stringify(filePath)}, 'rb'))
-schema = reader.schema
-fields = list(schema.fields.keys())
-print(json.dumps(fields))
-for row in reader:
-    obj = dict(zip(fields, row))
-    # convert non-serializable types (e.g. Date) to strings
-    for k, v in obj.items():
-        if not isinstance(v, (int, float, bool, str, type(None))):
-            obj[k] = str(v)
-    sys.stdout.write(json.dumps(obj) + '\\n')
-`.trim();
+    // Pass the file path as argv[1] rather than interpolating it into the script
+    // string — avoids command injection via crafted file paths with newlines or
+    // quote characters. The script receives the path as a plain argument.
+    const pyScript = [
+      'import sys, json, pyorc',
+      'reader = pyorc.Reader(open(sys.argv[1], "rb"))',
+      'schema = reader.schema',
+      'fields = list(schema.fields.keys())',
+      'print(json.dumps(fields))',
+      'for row in reader:',
+      '    obj = dict(zip(fields, row))',
+      '    for k, v in obj.items():',
+      '        if not isinstance(v, (int, float, bool, str, type(None))):',
+      '            obj[k] = str(v)',
+      '    sys.stdout.write(json.dumps(obj) + "\\n")',
+    ].join('\n');
 
     let stdout: string;
     try {
-      const result = await execFileAsync('python3', ['-c', pyScript], { maxBuffer: 200 * 1024 * 1024 });
+      const result = await execFileAsync('python3', ['-c', pyScript, filePath], { maxBuffer: 200 * 1024 * 1024 });
       stdout = result.stdout;
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -772,7 +779,6 @@ for row in reader:
   }
 
   private _nonce(): string {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    return Array.from({ length: 32 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+    return require('crypto').randomBytes(16).toString('base64url') as string;
   }
 }

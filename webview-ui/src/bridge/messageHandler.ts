@@ -66,21 +66,11 @@ export function setupMessageHandler(): () => void {
         const { fileType, duckBundles, jsonFormat, base64, base64Parts } = msg.payload;
         if (base64Parts && base64Parts.length > 0) {
           console.log('[GM] __RAW_BINARY__', fileType, 'parts=', base64Parts.length);
-          const buffers = base64Parts.map(b64 => {
-            const binary = atob(b64);
-            const buf = new ArrayBuffer(binary.length);
-            const view = new Uint8Array(buf);
-            for (let i = 0; i < binary.length; i++) view[i] = binary.charCodeAt(i);
-            return buf;
-          });
+          const buffers = base64Parts.map(b64ToArrayBuffer);
           gridStore.loadRawBinaryParts(buffers, fileType, duckBundles);
         } else if (base64) {
           console.log('[GM] __RAW_BINARY__', fileType, 'base64 len', base64.length);
-          const binary = atob(base64);
-          const buf = new ArrayBuffer(binary.length);
-          const view = new Uint8Array(buf);
-          for (let i = 0; i < binary.length; i++) view[i] = binary.charCodeAt(i);
-          gridStore.loadRawBinary(buf, fileType, duckBundles, jsonFormat);
+          gridStore.loadRawBinary(b64ToArrayBuffer(base64), fileType, duckBundles, jsonFormat);
         }
         break;
       }
@@ -97,6 +87,15 @@ export function setupMessageHandler(): () => void {
 
   window.addEventListener('message', handler);
   return () => window.removeEventListener('message', handler);
+}
+
+// ── Base64 → ArrayBuffer ──────────────────────────────────────────────────────
+// Uint8Array.from is faster than a manual charCodeAt loop for large payloads
+// because the engine can optimise the typed-array fill internally.
+
+function b64ToArrayBuffer(b64: string): ArrayBuffer {
+  const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  return bytes.buffer;
 }
 
 // ── Inline CSV parsing (synchronous, main thread, no Worker) ──────────────────

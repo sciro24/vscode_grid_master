@@ -1,21 +1,10 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { SMALL_FILE_THRESHOLD_BYTES } from '../shared/constants.js';
 import type { SidecarData } from '../shared/schema.js';
 
 export class FileReaderService {
-  async readBytes(uri: vscode.Uri, start: number, length: number): Promise<Uint8Array> {
-    const full = await vscode.workspace.fs.readFile(uri);
-    return full.slice(start, start + length);
-  }
-
   async readAll(uri: vscode.Uri): Promise<Uint8Array> {
     return vscode.workspace.fs.readFile(uri);
-  }
-
-  async readSample(uri: vscode.Uri, bytes = SMALL_FILE_THRESHOLD_BYTES): Promise<Uint8Array> {
-    const full = await vscode.workspace.fs.readFile(uri);
-    return full.slice(0, bytes);
   }
 
   async stat(uri: vscode.Uri): Promise<vscode.FileStat> {
@@ -30,7 +19,8 @@ export class FileReaderService {
     const sidecarUri = this._sidecarUri(uri);
     try {
       const raw = await vscode.workspace.fs.readFile(sidecarUri);
-      return JSON.parse(new TextDecoder().decode(raw)) as SidecarData;
+      const parsed: unknown = JSON.parse(new TextDecoder().decode(raw));
+      return parseSidecar(parsed);
     } catch {
       return null;
     }
@@ -47,4 +37,42 @@ export class FileReaderService {
     const base = path.basename(uri.fsPath);
     return vscode.Uri.file(path.join(dir, `.${base}.gridmaster.json`));
   }
+}
+
+function parseSidecar(raw: unknown): SidecarData | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const obj = raw as Record<string, unknown>;
+  if (obj['version'] !== 1) return null;
+  return {
+    version: 1,
+    columnOverrides: isStringRecord(obj['columnOverrides']) ? obj['columnOverrides'] as Record<string, import('../shared/schema.js').InferredType> : {},
+    bookmarks: Array.isArray(obj['bookmarks']) ? obj['bookmarks'] as SidecarData['bookmarks'] : [],
+    columnWidths: isNumberRecord(obj['columnWidths']) ? obj['columnWidths'] as Record<string, number> : {},
+    hiddenColumns: Array.isArray(obj['hiddenColumns']) ? (obj['hiddenColumns'] as unknown[]).filter((v): v is string => typeof v === 'string') : [],
+    pinnedColumns: isPinnedColumns(obj['pinnedColumns']) ? obj['pinnedColumns'] as SidecarData['pinnedColumns'] : { left: [], right: [] },
+    filters: Array.isArray(obj['filters']) ? obj['filters'] as SidecarData['filters'] : undefined,
+    colorsActive: typeof obj['colorsActive'] === 'boolean' ? obj['colorsActive'] : undefined,
+    sort: isSortEntry(obj['sort']) ? obj['sort'] as SidecarData['sort'] : null,
+  };
+}
+
+function isStringRecord(v: unknown): v is Record<string, string> {
+  return !!v && typeof v === 'object' && !Array.isArray(v);
+}
+
+function isNumberRecord(v: unknown): v is Record<string, number> {
+  return !!v && typeof v === 'object' && !Array.isArray(v);
+}
+
+function isPinnedColumns(v: unknown): v is { left: string[]; right: string[] } {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
+  const o = v as Record<string, unknown>;
+  return Array.isArray(o['left']) && Array.isArray(o['right']);
+}
+
+function isSortEntry(v: unknown): v is { column: string; direction: 'asc' | 'desc' } | null {
+  if (v === null || v === undefined) return true;
+  if (typeof v !== 'object' || Array.isArray(v)) return false;
+  const o = v as Record<string, unknown>;
+  return typeof o['column'] === 'string' && (o['direction'] === 'asc' || o['direction'] === 'desc');
 }

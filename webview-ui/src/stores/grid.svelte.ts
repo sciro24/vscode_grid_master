@@ -2,6 +2,7 @@ import type { ColumnSchema, CellValue, FilterSpec, SortSpec, ColumnStats, Sideca
 import type { InitPayload, ChunkPayload, EditAckPayload, ColumnStatsPayload } from '@shared/messages.js';
 import type { DuckDbWorkerIn, DuckDbWorkerOut } from '../workers/duckdb.worker.js';
 import { CHUNK_SIZE, MAX_CHUNKS_IN_MEMORY } from '@shared/constants.js';
+import { applyFilter, compareValues } from '@shared/filterUtils.js';
 import { uiStore } from './ui.svelte.js';
 import Papa from 'papaparse';
 import { postMessage } from '../bridge/vscode.js';
@@ -83,6 +84,11 @@ class GridStore {
   // Maps visible-row index (after filter/sort) → actual index in _csvAllRows.
   // Empty when there are no filters/sort/search active (identity mapping).
   private _viewToActual: number[] = [];
+
+  // Fingerprint of the last filter+sort+search state that produced _viewToActual.
+  // _serveCsvChunk skips recomputation when the fingerprint hasn't changed,
+  // so scrolling through a filtered 500k-row CSV doesn't re-sort on every chunk.
+  private _viewFingerprint = '';
 
   // Auto-fitted column widths, keyed by column name. Computed once after data load.
   private _autoWidths = new Map<string, number>();
@@ -452,7 +458,6 @@ class GridStore {
     return Papa.unparse({ fields: headers, data: rows }, {
       delimiter,
       newline: '\n',
-      quotes: false,        // only quote when needed (PapaParse decides per-cell)
       skipEmptyLines: false,
     });
   }
@@ -1084,32 +1089,45 @@ class GridStore {
 
     if (!hasFilter && !hasSearch && !hasSort) {
       // Identity mapping — clear the override so _actualRowIndex returns row as-is.
-      this._viewToActual = [];
-      this.filteredRows = this._csvAllRows.length;
+      if (this._viewToActual.length !== 0 || this._viewFingerprint !== '') {
+        this._viewToActual = [];
+        this._viewFingerprint = '';
+        this.filteredRows = this._csvAllRows.length;
+      }
       const sliced = this._csvAllRows.slice(startRow, Math.min(endRow, this._csvAllRows.length));
       this._storeChunk(startRow, sliced);
       return;
     }
 
-    // Build pairs of (row, actualIndex) so we don't lose the original index after
-    // filter/sort. Critical for row mutations (delete/duplicate/insert) under a filtered view.
-    let pairs: { row: CellValue[]; idx: number }[] = this._csvAllRows.map((row, idx) => ({ row, idx }));
+    // Recompute the filtered+sorted index only when filters/sort/search changed.
+    // Scrolling doesn't change this fingerprint, so repeated chunk requests for
+    // different viewport windows reuse the existing _viewToActual array.
+    const fingerprint = JSON.stringify({ filters: this.filters, sort: this.sort, q });
+    if (fingerprint !== this._viewFingerprint) {
+      // Build pairs of (row, actualIndex) so we don't lose the original index after
+      // filter/sort. Critical for row mutations (delete/duplicate/insert) under a filtered view.
+      let pairs: { row: CellValue[]; idx: number }[] = this._csvAllRows.map((row, idx) => ({ row, idx }));
 
-    if (hasFilter) {
-      pairs = pairs.filter(p => this.filters.every(f => applyFilter(p.row, f)));
-    }
-    if (hasSearch) {
-      pairs = pairs.filter(p => p.row.some(cell => String(cell ?? '').toLowerCase().includes(q)));
-    }
-    if (hasSort) {
-      const { colIndex, direction } = this.sort!;
-      pairs = [...pairs].sort((a, b) => compareValues(a.row[colIndex], b.row[colIndex], direction));
+      if (hasFilter) {
+        pairs = pairs.filter(p => this.filters.every(f => applyFilter(p.row, f)));
+      }
+      if (hasSearch) {
+        pairs = pairs.filter(p => p.row.some(cell => String(cell ?? '').toLowerCase().includes(q)));
+      }
+      if (hasSort) {
+        const { colIndex, direction } = this.sort!;
+        pairs = [...pairs].sort((a, b) => compareValues(a.row[colIndex], b.row[colIndex], direction));
+      }
+
+      this._viewToActual = pairs.map(p => p.idx);
+      this._viewFingerprint = fingerprint;
+      this.filteredRows = pairs.length;
     }
 
-    this._viewToActual = pairs.map(p => p.idx);
-    this.filteredRows = pairs.length;
-    const slicedPairs = pairs.slice(startRow, Math.min(endRow, pairs.length));
-    this._storeChunk(startRow, slicedPairs.map(p => p.row));
+    const slicedPairs = this._viewToActual
+      .slice(startRow, Math.min(endRow, this._viewToActual.length))
+      .map(idx => this._csvAllRows[idx]);
+    this._storeChunk(startRow, slicedPairs);
   }
 
   // Translate a visible row index (the one DataGrid renders) into the actual
@@ -1133,6 +1151,7 @@ class GridStore {
   private _invalidateCache(): void {
     this._cache.clear();
     this._accessOrder = [];
+    this._viewFingerprint = '';
     this.cacheVersion++;
     this._requestChunk(this.visibleStartRow, this.visibleEndRow + CHUNK_SIZE);
   }
@@ -1274,39 +1293,6 @@ class GridStore {
       postMessage({ type: 'SAVE_SIDECAR', payload: { sidecar } });
     }, 300) as unknown as number;
   }
-}
-
-// ── Filter/sort helpers (mirrors csv.worker.ts logic) ─────────────────────────
-
-function applyFilter(row: CellValue[], f: FilterSpec): boolean {
-  const cell = row[f.colIndex];
-  const val = f.value;
-  switch (f.op) {
-    case 'eq':           return cell == val;
-    case 'neq':          return cell != val;
-    case 'contains':     return String(cell ?? '').toLowerCase().includes(String(val).toLowerCase());
-    case 'not_contains': return !String(cell ?? '').toLowerCase().includes(String(val).toLowerCase());
-    case 'gt':           return Number(cell) > Number(val);
-    case 'lt':           return Number(cell) < Number(val);
-    case 'gte':          return Number(cell) >= Number(val);
-    case 'lte':          return Number(cell) <= Number(val);
-    case 'regex':        return new RegExp(String(val), 'i').test(String(cell ?? ''));
-    case 'is_null':      return cell === null;
-    case 'is_not_null':  return cell !== null;
-    default:             return true;
-  }
-}
-
-function compareValues(a: CellValue, b: CellValue, dir: 'asc' | 'desc'): number {
-  const aNum = Number(a);
-  const bNum = Number(b);
-  let cmp: number;
-  if (!isNaN(aNum) && !isNaN(bNum)) {
-    cmp = aNum - bNum;
-  } else {
-    cmp = String(a ?? '').localeCompare(String(b ?? ''));
-  }
-  return dir === 'asc' ? cmp : -cmp;
 }
 
 export const gridStore = new GridStore();
