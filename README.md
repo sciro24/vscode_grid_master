@@ -143,6 +143,7 @@
   &nbsp;&nbsp;
   <img src="https://raw.githubusercontent.com/sciro24/vscode_grid_master/main/assets/filter.png" alt="Filter and color columns" width="48%" />
 </p>
+
 ---
 
 ## Getting started
@@ -218,4 +219,4 @@ Found a bug or want a new feature? [Open an issue on GitHub](https://github.com/
 
 ## License
 
-MIT
+MIT © 2026 [Diego Scirocco](https://github.com/sciro24)
