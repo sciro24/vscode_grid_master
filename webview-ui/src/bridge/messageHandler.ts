@@ -126,6 +126,8 @@ export function setupMessageHandler(): () => void {
 // so streaming stops early.
 
 const MAX_WEBVIEW_ROWS = 1_000_000;
+const MEMORY_PRESSURE_RATIO = 0.82;
+const MEMORY_CHECK_INTERVAL_MS = 250;
 const MAX_FLUSH_PER_RAF = 50_000;
 
 let _csvStreamSchema: ColumnSchema[] | null = null;
@@ -134,6 +136,21 @@ let _csvStreamInitialized = false;
 let _pendingAppendRows: CellValue[][] = [];
 let _rafPending = false;
 let _streamCapped = false;
+let _lastMemoryCheck = 0;
+let _lastMemoryRatio: number | null = null;
+
+function _readMemoryRatio(): number | null {
+  const mem = (performance as unknown as { memory?: { usedJSHeapSize: number; jsHeapSizeLimit: number } }).memory;
+  if (!mem || !mem.usedJSHeapSize || !mem.jsHeapSizeLimit) return null;
+  return mem.usedJSHeapSize / mem.jsHeapSizeLimit;
+}
+
+function _updateMemoryRatio(): void {
+  const now = performance.now();
+  if (now - _lastMemoryCheck < MEMORY_CHECK_INTERVAL_MS) return;
+  _lastMemoryCheck = now;
+  _lastMemoryRatio = _readMemoryRatio();
+}
 
 function _flushPendingAppend(): void {
   const toFlush = _pendingAppendRows.splice(0, MAX_FLUSH_PER_RAF);
@@ -147,15 +164,21 @@ function _flushPendingAppend(): void {
   }
 }
 
-function _capStream(): void {
+function _capStream(reason: 'limit' | 'memory'): void {
   _streamCapped = true;
   _pendingAppendRows = [];
   _rafPending = false;
   gridStore.finalizeCsvRows(gridStore.totalRows);
-  gridStore.setRowCapWarning(true);
+  gridStore.setCsvStreaming(false);
+  gridStore.setRowCapWarning(reason);
   uiStore.setLoading(false);
   postMessage({ type: 'LARGE_FILE_STREAM_CANCEL' });
 }
+
+// Set to true while a large-file stream is in progress so App.svelte
+// keeps the LoadingOverlay visible even after the first batch arrives.
+let _streamingInProgress = false;
+export function isStreamingInProgress(): boolean { return _streamingInProgress; }
 
 function handleCsvBatch(p: {
   schema?: ColumnSchema[];
@@ -165,6 +188,7 @@ function handleCsvBatch(p: {
   kind: 'init' | 'rows' | 'done';
   totalRows?: number;
   bytesRead?: number;
+  previewOnly?: boolean;
 }): void {
   if (p.kind === 'init') {
     _csvStreamSchema = p.schema ?? [];
@@ -173,24 +197,43 @@ function handleCsvBatch(p: {
     _pendingAppendRows = [];
     _rafPending = false;
     _streamCapped = false;
+    _streamingInProgress = true;
+    gridStore.setCsvStreaming(true);
     return;
   }
   if (_streamCapped) return;
   if (p.kind === 'rows') {
     if (p.rows.length === 0) return;
+    _updateMemoryRatio();
+    if (_lastMemoryRatio !== null && _lastMemoryRatio >= MEMORY_PRESSURE_RATIO) {
+      _capStream('memory');
+      return;
+    }
+    const current = gridStore.totalRows + _pendingAppendRows.length;
+    let limitedRows = p.rows;
+    if (_lastMemoryRatio === null) {
+      const remaining = MAX_WEBVIEW_ROWS - current;
+      if (remaining <= 0) {
+        _capStream('limit');
+        return;
+      }
+      limitedRows = p.rows.length > remaining ? p.rows.slice(0, remaining) : p.rows;
+    }
     if (!_csvStreamInitialized) {
-      gridStore.receiveCsvData(_csvStreamSchema ?? [], p.rows, _csvStreamDelimiter);
+      // First batch: store rows but don't expose to grid yet (grid hidden during load).
+      // receiveCsvData initialises schema + puts rows in _csvAllRows.
+      gridStore.receiveCsvData(_csvStreamSchema ?? [], limitedRows, _csvStreamDelimiter);
       _csvStreamInitialized = true;
     } else {
-      const spaceLeft = MAX_WEBVIEW_ROWS - gridStore.totalRows - _pendingAppendRows.length;
-      if (spaceLeft <= 0) { _capStream(); return; }
-      const rowsToAdd = spaceLeft < p.rows.length ? p.rows.slice(0, spaceLeft) : p.rows;
-      for (const r of rowsToAdd) _pendingAppendRows.push(r);
+      for (const r of limitedRows) _pendingAppendRows.push(r);
       if (!_rafPending) {
         _rafPending = true;
         requestAnimationFrame(_flushPendingAppend);
       }
-      if (spaceLeft <= p.rows.length) { _capStream(); return; }
+    }
+    if (limitedRows.length < p.rows.length) {
+      _capStream('limit');
+      return;
     }
     if (p.bytesRead !== undefined && gridStore.totalBytes > 0) {
       const pct = Math.min(99, Math.round((p.bytesRead / gridStore.totalBytes) * 100));
@@ -198,14 +241,27 @@ function handleCsvBatch(p: {
     }
     return;
   }
-  // kind === 'done' — flush any remaining pending rows synchronously
-  if (_pendingAppendRows.length > 0) {
-    gridStore.appendCsvRows(_pendingAppendRows);
-    _pendingAppendRows = [];
-    _rafPending = false;
-  }
-  gridStore.finalizeCsvRows(p.totalRows ?? gridStore.totalRows);
-  uiStore.setLoading(false);
+  // kind === 'done' — all IPC batches received; wait for any in-flight RAF drain,
+  // then finalize. We schedule finalization via RAF so the main thread isn't
+  // blocked by a synchronous flush of potentially millions of pending rows.
+  const totalRows = p.totalRows ?? gridStore.totalRows;
+  const previewOnly = !!p.previewOnly;
+
+  const _finalize = (): void => {
+    if (_rafPending || _pendingAppendRows.length > 0) {
+      // RAF drain still in progress — re-schedule finalization
+      requestAnimationFrame(_finalize);
+      return;
+    }
+    gridStore.finalizeCsvRows(totalRows);
+    gridStore.setCsvStreaming(false);
+    if (previewOnly) gridStore.setRowCapWarning('preview');
+    _streamingInProgress = false;
+    uiStore.setStreamProgress(100);
+    // Small delay so the "100%" flash is visible before overlay hides
+    setTimeout(() => uiStore.setLoading(false), 300);
+  };
+  requestAnimationFrame(_finalize);
 }
 
 function b64ToArrayBuffer(b64: string): ArrayBuffer {

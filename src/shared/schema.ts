@@ -52,6 +52,10 @@ export interface SidecarData {
   colorsActive?: boolean;
   /** Sort by column name + direction; null/undefined → no saved sort. */
   sort?: { column: string; direction: 'asc' | 'desc' } | null;
+  /** Visual column order as array of schema indices. Absent = natural order. */
+  columnOrder?: number[];
+  /** Schema indices of individually frozen columns. Absent = none frozen. */
+  frozenCols?: number[];
 }
 
 export interface Bookmark {

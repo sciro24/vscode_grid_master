@@ -27,8 +27,22 @@
 
   {#if !report}
     <div class="msg">
-      <strong>Dataset statistics not available</strong>
-      <p>Statistics need the full dataset in memory. For Parquet/Arrow files in lazy mode (>100k rows) the data is streamed on demand and full-dataset stats are not yet computed.</p>
+      <div class="msg-title">Dataset statistics not available</div>
+      <p>
+        <strong>{gridStore.fileName}</strong> is a <strong>{gridStore.fileType.toUpperCase()}</strong> file
+        with <strong>{gridStore.totalRows.toLocaleString('en-US')}</strong> rows and
+        <strong>{gridStore.schema.length}</strong> columns.
+      </p>
+      <p class="msg-reason">
+        Full statistics require the entire dataset in memory. Binary formats (Parquet, Arrow, JSON, Excel)
+        are loaded on demand via DuckDB — only the visible rows are kept in memory at any time.
+        This keeps memory usage low for large files but means per-column stats (min, max, nulls, distinct)
+        cannot be computed without a full scan.
+      </p>
+      <p class="msg-hint">
+        💡 For per-column statistics, right-click any column header and choose <em>Column statistics</em>.
+        Column stats are computed from the full dataset for in-memory formats (CSV, SQLite, Avro, ORC).
+      </p>
     </div>
   {:else}
     <div class="header">
@@ -313,4 +327,26 @@
     line-height: 1.5;
   }
   .msg p { margin: 6px 0 0; font-size: 11px; }
+  .msg-title {
+    font-weight: 600;
+    font-size: 13px;
+    margin-bottom: 8px;
+    color: var(--gm-fg);
+  }
+  .msg-reason {
+    margin-top: 8px;
+    color: var(--gm-fg-muted);
+    font-size: 11px;
+    line-height: 1.6;
+  }
+  .msg-hint {
+    margin-top: 8px;
+    padding: 8px 10px;
+    background: var(--vscode-input-background, rgba(255,255,255,0.04));
+    border-radius: 4px;
+    border-left: 3px solid var(--gm-accent, var(--vscode-focusBorder, #007acc));
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--gm-fg-muted);
+  }
 </style>

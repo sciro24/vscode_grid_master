@@ -11,6 +11,7 @@
   import LoadingOverlay from './components/LoadingOverlay.svelte';
   import LargeFileWarning from './components/LargeFileWarning.svelte';
   import ErrorBanner from './components/ErrorBanner.svelte';
+  import NoticeBanner from './components/NoticeBanner.svelte';
 
   let teardown: (() => void) | null = null;
 
@@ -25,11 +26,16 @@
 
   const hasData = $derived(gridStore.schema.length > 0);
   const hasFilters = $derived(gridStore.filters.length > 0);
+  const memoryTruncated = $derived(gridStore.rowCapWarning === 'memory');
 </script>
 
 <div class="app-shell">
   {#if uiStore.error}
     <ErrorBanner message={uiStore.error} />
+  {/if}
+
+  {#if memoryTruncated}
+    <NoticeBanner message="Truncated due to memory limits. The grid stopped loading additional rows to keep the session stable." />
   {/if}
 
   <Toolbar />
@@ -41,8 +47,15 @@
   <div class="grid-area">
     {#if uiStore.largeFileWarning !== null}
       <LargeFileWarning fileSizeMb={uiStore.largeFileWarning.fileSizeMb} />
-    {:else if uiStore.loading && !hasData}
-      <LoadingOverlay message={uiStore.loadingMessage} progress={uiStore.loadingProgress} />
+    {:else if uiStore.loading}
+      <!-- Keep LoadingOverlay for entire duration — during streaming this covers
+           the partially-loaded grid so the user sees clean progress, not a flickering grid. -->
+      <LoadingOverlay
+        message={uiStore.streamProgress !== undefined
+          ? `Loading… ${uiStore.streamProgress}% · ${gridStore.totalRows.toLocaleString('en-US')} rows`
+          : uiStore.loadingMessage}
+        progress={uiStore.streamProgress ?? uiStore.loadingProgress}
+      />
     {:else if hasData}
       <DataGrid />
     {:else}
@@ -53,11 +66,6 @@
     {/if}
   </div>
 
-  {#if uiStore.streamProgress !== undefined}
-    <div class="stream-progress-bar">
-      <div class="stream-progress-fill" style="width: {uiStore.streamProgress}%"></div>
-    </div>
-  {/if}
 
   <StatusBar />
 </div>
@@ -108,4 +116,34 @@
     background: var(--gm-success);
     transition: width 0.3s ease;
   }
+
+  .stream-progress-toast {
+    position: absolute;
+    bottom: 32px;
+    right: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: var(--gm-toolbar-bg, var(--vscode-editorWidget-background));
+    border: 1px solid var(--gm-border, var(--vscode-panel-border));
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    font-size: 11px;
+    color: var(--gm-fg-muted);
+    z-index: 5;
+    pointer-events: none;
+  }
+
+  .stream-toast-spinner {
+    width: 12px;
+    height: 12px;
+    border: 1.5px solid var(--gm-border);
+    border-top-color: var(--gm-accent, var(--vscode-focusBorder));
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    flex-shrink: 0;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
 </style>

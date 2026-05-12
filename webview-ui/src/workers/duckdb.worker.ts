@@ -127,9 +127,36 @@ async function handleLoad(buffer: ArrayBuffer, fileType: 'parquet' | 'arrow' | '
     // JSON / NDJSON — parse directly; skip arrow.tableFromJSON which uses
     // `new Function` internally and is blocked by the webview CSP.
     const text = new TextDecoder().decode(buffer);
-    const rawRows: Record<string, unknown>[] = jsonFormat === 'ndjson'
-      ? text.trim().split('\n').filter(Boolean).map(l => JSON.parse(l))
-      : JSON.parse(text);
+    let rawRows: Record<string, unknown>[] = [];
+    if (jsonFormat === 'ndjson') {
+      const lines = text.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        try {
+          const parsed = JSON.parse(line);
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            throw new Error('Expected JSON object');
+          }
+          rawRows.push(parsed as Record<string, unknown>);
+        } catch (e) {
+          throw new Error(`Invalid NDJSON at line ${i + 1}: ${String(e)}`);
+        }
+      }
+    } else {
+      try {
+        const parsed = JSON.parse(text) as unknown;
+        if (Array.isArray(parsed)) {
+          rawRows = parsed as Record<string, unknown>[];
+        } else if (parsed && typeof parsed === 'object') {
+          rawRows = [parsed as Record<string, unknown>];
+        } else {
+          throw new Error('JSON root must be an object or array');
+        }
+      } catch (e) {
+        throw new Error(`Invalid JSON: ${String(e)}`);
+      }
+    }
 
     const colNames = rawRows.length > 0 ? Object.keys(rawRows[0]) : [];
     _schema = colNames.map((name, index) => ({

@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "rm -rf dist && GM_BUILD=worker vite build && GM_BUILD=main vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@duckdb/duckdb-wasm": "^1.33.1-dev45.0",
@@ -22,6 +24,7 @@
     "@types/papaparse": "^5.3.14",
     "vite": "^5.0.0",
     "vite-plugin-top-level-await": "^1.6.0",
-    "vite-plugin-wasm": "^3.6.0"
+    "vite-plugin-wasm": "^3.6.0",
+    "vitest": "^2.1.1"
   }
 }

@@ -20,9 +20,11 @@
   // Read cacheVersion so cell reads in the template re-evaluate when the cache mutates.
   const cacheTick = $derived(gridStore.cacheVersion);
 
-  const startRow = $derived(Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN));
+  const rawStartRow = $derived(Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN));
+  const startRow = $derived(totalRows === 0 ? 0 : Math.min(rawStartRow, Math.max(0, totalRows - 1)));
   const visibleRowCount = $derived(Math.ceil(viewportHeight / ROW_HEIGHT) + OVERSCAN * 2);
   const endRow = $derived(Math.min(totalRows, startRow + visibleRowCount));
+  const rowCount = $derived(Math.max(0, endRow - startRow));
 
   $effect(() => {
     gridStore.updateViewport(startRow, endRow);
@@ -214,7 +216,55 @@
   const selectedCol = $derived(gridStore.selectedCol);
   const selectedCell = $derived(gridStore.selectedCell);
   const selectedRange = $derived(gridStore.selectedRange);
-  const freezeFirstCol = $derived(gridStore.freezeFirstColumn);
+  const frozenCols = $derived(gridStore.frozenCols);
+
+  // Returns the sticky `left` offset (in px) for a frozen column at visual position `colPos`.
+  // Row-number column is 56px + 1px border = 57px. Sums widths of all frozen cols before this one.
+  function getFrozenLeft(col: import('@shared/schema.js').ColumnSchema, colPos: number): number {
+    const ROW_NUM_WIDTH = 57;
+    let left = ROW_NUM_WIDTH;
+    const visSchema = gridStore.visibleSchema;
+    for (let i = 0; i < colPos; i++) {
+      const c = visSchema[i];
+      if (c && frozenCols.has(c.index)) {
+        left += colWidth(c.name, c.inferredType);
+      }
+    }
+    return left;
+  }
+
+  // ── Column drag-to-reorder ────────────────────────────────────────────────
+
+  let dragFromPos = $state<number | null>(null);
+  let dragOverPos = $state<number | null>(null);
+
+  function onHeaderDragStart(e: DragEvent, colPos: number) {
+    dragFromPos = colPos;
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', String(colPos));
+    }
+  }
+
+  function onHeaderDragOver(e: DragEvent, colPos: number) {
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    dragOverPos = colPos;
+  }
+
+  function onHeaderDrop(e: DragEvent, colPos: number) {
+    e.preventDefault();
+    if (dragFromPos !== null && dragFromPos !== colPos) {
+      gridStore.reorderColumn(dragFromPos, colPos);
+    }
+    dragFromPos = null;
+    dragOverPos = null;
+  }
+
+  function onHeaderDragEnd() {
+    dragFromPos = null;
+    dragOverPos = null;
+  }
 
   function isRowSelected(row: number): boolean {
     return selectedRow === row;
@@ -369,12 +419,18 @@
         <div class="row-num-cell header-cell row-num-frozen">#</div>
         {#each gridStore.visibleSchema as col, colPos (col.index)}
           {@const colSel = isColSelected(col.index)}
-          {@const isFrozen = freezeFirstCol && colPos === 0}
+          {@const isFrozen = frozenCols.has(col.index)}
           <div
             class="header-cell"
             class:header-cell-selected={colSel}
             class:col-frozen={isFrozen}
-            style="width: {colWidth(col.name, col.inferredType)}px; {colBgStyle(col.index)}"
+            class:drag-over={dragOverPos === colPos && dragFromPos !== colPos}
+            draggable="true"
+            ondragstart={(e) => onHeaderDragStart(e, colPos)}
+            ondragover={(e) => onHeaderDragOver(e, colPos)}
+            ondrop={(e) => onHeaderDrop(e, colPos)}
+            ondragend={onHeaderDragEnd}
+            style="width: {colWidth(col.name, col.inferredType)}px; {colBgStyle(col.index)}{isFrozen ? ' left: ' + getFrozenLeft(col, colPos) + 'px;' : ''}"
             oncontextmenu={(e) => onHeaderContextMenu(e, col.index)}
           >
             <button
@@ -398,7 +454,7 @@
 
       <!-- Virtualized rows -->
       <div class="grid-rows" style="transform: translateY({HEADER_HEIGHT + startRow * ROW_HEIGHT}px);">
-        {#each Array(endRow - startRow) as _, i}
+        {#each Array(rowCount) as _, i}
           {@const row = startRow + i}
           {@const rowSel = isRowSelected(row)}
           <div class="grid-row" class:row-selected={rowSel} style="height: {ROW_HEIGHT}px;">
@@ -413,7 +469,7 @@
             >{row + 1}</div>
             {#each gridStore.visibleSchema as col, colPos (col.index)}
               {@const val = (cacheTick, gridStore.getCell(row, col.index))}
-              {@const isFrozen = freezeFirstCol && colPos === 0}
+              {@const isFrozen = frozenCols.has(col.index)}
               {#if editingCell && editingCell.row === row && editingCell.col === col.index}
                 <input
                   class="cell-input"
@@ -433,7 +489,7 @@
                   class:cell-cross={isCrossPivot(row, col.index)}
                   class:cell-in-range={isInRange(row, col.index)}
                   class:col-frozen={isFrozen}
-                  style="width: {colWidth(col.name, col.inferredType)}px; {colBgStyle(col.index)}"
+                  style="width: {colWidth(col.name, col.inferredType)}px; {colBgStyle(col.index)}{isFrozen ? ' left: ' + getFrozenLeft(col, colPos) + 'px;' : ''}"
                   onclick={(e) => onCellClick(e, row, col.index)}
                   ondblclick={() => startEdit(row, col.index)}
                   role="button"
@@ -672,7 +728,6 @@
   .header-cell.col-frozen,
   .cell.col-frozen {
     position: sticky;
-    left: 56px;
     z-index: 1;
     background: var(--gm-cell-bg, var(--vscode-editor-background));
     box-shadow: 2px 0 0 0 var(--vscode-focusBorder, #007acc);
@@ -782,5 +837,17 @@
      but no overlay tint that would obscure the column colour */
   .grid-root.is-coloured .cell.cell-selected {
     background: inherit;
+  }
+
+  .header-cell.drag-over {
+    border-left: 2px solid var(--vscode-focusBorder, #007acc);
+  }
+
+  .header-cell[draggable="true"] {
+    cursor: grab;
+  }
+  .header-cell[draggable="true"]:active {
+    cursor: grabbing;
+    opacity: 0.7;
   }
 </style>

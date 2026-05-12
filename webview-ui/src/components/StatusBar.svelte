@@ -101,7 +101,13 @@
 
   <div class="status-right">
     {#if gridStore.rowCapWarning}
-      <span class="status-badge cap-badge" title="File too large for full display — showing first 1M rows">Truncated</span>
+      {#if gridStore.rowCapWarning === 'preview'}
+        <span class="status-badge cap-badge" title="Preview mode — showing the first 100k rows">Preview</span>
+      {:else if gridStore.rowCapWarning === 'memory'}
+        <span class="status-badge cap-badge" title="Truncated due to memory limits">Truncated (memory)</span>
+      {:else}
+        <span class="status-badge cap-badge" title="File too large for full display — showing the first 1M rows">Truncated</span>
+      {/if}
     {/if}
     {#if isDirty}
       <span class="status-badge dirty-badge">Unsaved</span>

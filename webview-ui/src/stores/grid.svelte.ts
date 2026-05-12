@@ -3,6 +3,7 @@ import type { InitPayload, ChunkPayload, EditAckPayload, ColumnStatsPayload } fr
 import type { DuckDbWorkerIn, DuckDbWorkerOut } from '../workers/duckdb.worker.js';
 import { CHUNK_SIZE, MAX_CHUNKS_IN_MEMORY } from '@shared/constants.js';
 import { applyFilter, compareValues } from '@shared/filterUtils.js';
+import { buildViewIndex, hasViewTransform, mapVisibleRow } from './csvView.js';
 import { uiStore } from './ui.svelte.js';
 import Papa from 'papaparse';
 import { postMessage } from '../bridge/vscode.js';
@@ -73,6 +74,9 @@ class GridStore {
   // Grid data
   private _cache: ChunkCache = new Map();
   private _accessOrder: number[] = [];
+  // Chunks currently being built by _serveCsvChunk or pending worker response.
+  // Prevents re-entering the same chunk request on every render frame.
+  private _pendingChunks = new Set<number>();
 
   // Reactive counter — bumped on any cache mutation so derived UI re-renders.
   // Plain Maps aren't reactive in Svelte 5, this is the cheapest fix.
@@ -82,6 +86,10 @@ class GridStore {
   private _csvAllRows: CellValue[][] = [];
   // Delimiter detected at parse time; preserved for save round-trip.
   private _detectedDelimiter = ',';
+  // True while large CSV streaming is still appending rows.
+  private _csvStreaming = false;
+  // Debounced rebuild timer for large CSVs during streaming.
+  private _csvViewRebuildTimer: number | null = null;
 
   // Maps visible-row index (after filter/sort) → actual index in _csvAllRows.
   // Empty when there are no filters/sort/search active (identity mapping).
@@ -91,6 +99,7 @@ class GridStore {
   // _serveCsvChunk skips recomputation when the fingerprint hasn't changed,
   // so scrolling through a filtered 500k-row CSV doesn't re-sort on every chunk.
   private _viewFingerprint = '';
+  private _viewBuilding = false;
 
   // Auto-fitted column widths, keyed by column name. Computed once after data load.
   private _autoWidths = new Map<string, number>();
@@ -117,9 +126,11 @@ class GridStore {
   // Anchor of an in-progress range selection (the first click of a click → shift-click sequence).
   selectionAnchor = $state<{ row: number; col: number } | null>(null);
 
-  // Freeze the first data column so it stays visible while scrolling horizontally.
-  // The row-number column is always frozen (sticky left:0).
-  freezeFirstColumn = $state(false);
+  // Set of schema column indices that are frozen (sticky left).
+  frozenCols = $state<Set<number>>(new Set());
+
+  // Visual column order: array of schema indices. null = natural (schema) order.
+  columnOrder = $state<number[] | null>(null);
 
   // Workers (DuckDB only — CSV is parsed inline in the main thread)
   private _duckWorker: Worker | null = null;
@@ -146,6 +157,7 @@ class GridStore {
     this.fileName = payload.fileName;
     this.totalBytes = payload.totalBytes;
     this.schema = payload.schema;
+    this.rowCapWarning = null;
     // The sidecar is stored now but applied later, *after* the schema is fully
     // populated (which happens when CSV / raw-rows arrive, or when the worker
     // posts READY for binary formats). _applySidecar relies on schema names
@@ -156,6 +168,14 @@ class GridStore {
         // INIT already had schema (rare but possible) → apply right away.
         this._applySidecar(payload.sidecar);
       }
+    }
+  }
+
+  setCsvStreaming(active: boolean): void {
+    if (this._csvStreaming === active) return;
+    this._csvStreaming = active;
+    if (!active) {
+      this._ensureInMemoryView();
     }
   }
 
@@ -208,32 +228,34 @@ class GridStore {
     this.filteredRows = allRows.length;
     this._csvAllRows = allRows;
     this._detectedDelimiter = delimiter;
+    this.rowCapWarning = null;
     this._computeAutoWidths(schema, allRows);
     this._applyPendingSidecar();
-    this._storeChunk(0, allRows.slice(0, CHUNK_SIZE));
-    // Ensure the chunk reflects any sidecar-restored filter/sort.
-    if (this.filters.length > 0 || this.sort) this._invalidateCache();
+    this._ensureInMemoryView();
+    this.cacheVersion++;
   }
 
   appendCsvRows(rows: CellValue[][]): void {
     for (const r of rows) this._csvAllRows.push(r);
     this.totalRows = this._csvAllRows.length;
     this.filteredRows = this._csvAllRows.length;
-    // Don't invalidate cache — existing chunks are still valid (rows only appended at end).
-    // Bump cacheVersion so reactive row-count displays update.
+    if (hasViewTransform(this.filters, this.sort, this.globalSearch)) {
+      this._scheduleCsvViewRebuild();
+    }
     this.cacheVersion++;
   }
 
   finalizeCsvRows(totalRows: number): void {
     this.totalRows = totalRows;
     this.filteredRows = totalRows;
+    this._ensureInMemoryView();
     this.cacheVersion++;
   }
 
-  rowCapWarning = $state(false);
+  rowCapWarning = $state<'preview' | 'limit' | 'memory' | null>(null);
 
-  setRowCapWarning(v: boolean): void {
-    this.rowCapWarning = v;
+  setRowCapWarning(reason: 'preview' | 'limit' | 'memory' | null): void {
+    this.rowCapWarning = reason;
   }
 
   // Sample first N rows + header to estimate optimal column widths.
@@ -261,6 +283,54 @@ class GridStore {
 
   getAutoWidth(colName: string): number | undefined {
     return this._autoWidths.get(colName);
+  }
+
+  private _isInMemoryTable(): boolean {
+    return this.fileType === 'csv' || this.fileType === 'sqlite' || this.fileType === 'avro' || this.fileType === 'orc';
+  }
+
+  private _scheduleCsvViewRebuild(): void {
+    if (this._csvViewRebuildTimer !== null) return;
+    this._csvViewRebuildTimer = window.setTimeout(() => {
+      this._csvViewRebuildTimer = null;
+      this._ensureInMemoryView();
+    }, 120);
+  }
+
+  private _ensureInMemoryView(): void {
+    if (!this._isInMemoryTable()) return;
+
+    const q = this.globalSearch.trim().toLowerCase();
+    if (!hasViewTransform(this.filters, this.sort, q)) {
+      if (this._viewToActual.length !== 0 || this._viewFingerprint !== '') {
+        this._viewToActual = [];
+        this._viewFingerprint = '';
+        this.filteredRows = this._csvAllRows.length;
+        this.cacheVersion++;
+      } else if (this.filteredRows !== this._csvAllRows.length) {
+        this.filteredRows = this._csvAllRows.length;
+      }
+      return;
+    }
+
+    const fingerprint = JSON.stringify({
+      filters: this.filters,
+      sort: this.sort,
+      q,
+      rows: this._csvStreaming ? this._csvAllRows.length : undefined,
+    });
+    if (fingerprint === this._viewFingerprint) return;
+
+    if (this._csvAllRows.length > 200_000) {
+      if (!this._viewBuilding) this._rebuildViewAsync(fingerprint);
+      return;
+    }
+
+    const view = buildViewIndex(this._csvAllRows, this.filters, this.sort, q);
+    this._viewToActual = view;
+    this._viewFingerprint = fingerprint;
+    this.filteredRows = view.length;
+    this.cacheVersion++;
   }
 
   loadRawBinary(
@@ -295,6 +365,12 @@ class GridStore {
   // ── Data Access ───────────────────────────────────────────────────────────
 
   getCell(row: number, col: number): CellValue {
+    if (this._isInMemoryTable()) {
+      this._ensureInMemoryView();
+      const actual = mapVisibleRow(row, this._viewToActual, this._csvAllRows.length);
+      if (actual < 0) return null;
+      return this._csvAllRows[actual]?.[col] ?? null;
+    }
     const chunkStart = Math.floor(row / CHUNK_SIZE) * CHUNK_SIZE;
     const chunk = this._cache.get(chunkStart);
     if (!chunk) {
@@ -307,6 +383,11 @@ class GridStore {
   updateViewport(startRow: number, endRow: number): void {
     this.visibleStartRow = startRow;
     this.visibleEndRow = endRow;
+
+    if (this._isInMemoryTable()) {
+      this._ensureInMemoryView();
+      return;
+    }
 
     const prefetchStart = Math.max(0, Math.floor(startRow / CHUNK_SIZE) - 1) * CHUNK_SIZE;
     const prefetchEnd = (Math.floor(endRow / CHUNK_SIZE) + 2) * CHUNK_SIZE;
@@ -322,6 +403,7 @@ class GridStore {
 
   setCellValue(row: number, col: number, value: CellValue): void {
     const actualRow = this._actualRowIndex(row);
+    if (actualRow < 0) return;
     // Always read oldValue from the source-of-truth array, not the chunk cache
     // (cache may be stale or invalidated when a filter is active).
     let oldValue: CellValue = null;
@@ -330,11 +412,13 @@ class GridStore {
       this._csvAllRows[actualRow][col] = value;
     }
     // Also update the cache so the current render sees the change immediately.
-    const chunkStart = Math.floor(row / CHUNK_SIZE) * CHUNK_SIZE;
-    const chunk = this._cache.get(chunkStart);
-    if (chunk) {
-      const rowData = chunk[row - chunkStart];
-      if (rowData) rowData[col] = value;
+    if (!this._isInMemoryTable()) {
+      const chunkStart = Math.floor(row / CHUNK_SIZE) * CHUNK_SIZE;
+      const chunk = this._cache.get(chunkStart);
+      if (chunk) {
+        const rowData = chunk[row - chunkStart];
+        if (rowData) rowData[col] = value;
+      }
     }
     this._editHistory.push({ kind: 'CELL_EDIT', row: actualRow, col, oldValue, newValue: value });
     this.editCount = this._editHistory.length;
@@ -545,6 +629,7 @@ class GridStore {
   deleteRow(visibleRow: number): void {
     if (this.fileType !== 'csv') return;
     const actual = this._actualRowIndex(visibleRow);
+    if (actual < 0) return;
     const removed = this._csvAllRows[actual];
     if (!removed) return;
     this._csvAllRows.splice(actual, 1);
@@ -559,6 +644,7 @@ class GridStore {
     if (this.fileType !== 'csv') return;
     this._suspendSortForStructuralChange();
     const actual = this._actualRowIndex(visibleRow);
+    if (actual < 0) return;
     const empty = new Array(this.schema.length).fill(null) as CellValue[];
     this._csvAllRows.splice(actual, 0, empty);
     this.totalRows = this._csvAllRows.length;
@@ -572,6 +658,7 @@ class GridStore {
     if (this.fileType !== 'csv') return;
     this._suspendSortForStructuralChange();
     const actual = this._actualRowIndex(visibleRow);
+    if (actual < 0) return;
     const empty = new Array(this.schema.length).fill(null) as CellValue[];
     const at = actual + 1;
     this._csvAllRows.splice(at, 0, empty);
@@ -586,6 +673,7 @@ class GridStore {
     if (this.fileType !== 'csv') return;
     this._suspendSortForStructuralChange();
     const actual = this._actualRowIndex(visibleRow);
+    if (actual < 0) return;
     const src = this._csvAllRows[actual];
     if (!src) return;
     const copy = [...src];
@@ -599,7 +687,17 @@ class GridStore {
   }
 
   copyRowToClipboard(visibleRow: number): void {
-    // Read directly from the chunk cache (works for any file type, not just CSV).
+    if (this._isInMemoryTable()) {
+      const actual = this._actualRowIndex(visibleRow);
+      if (actual < 0) return;
+      const rowData = this._csvAllRows[actual];
+      if (!rowData) return;
+      const header = this.schema.map(c => c.name).join('\t');
+      const line = this.schema.map(c => String(rowData[c.index] ?? '')).join('\t');
+      navigator.clipboard.writeText(header + '\n' + line).catch(() => {});
+      return;
+    }
+    // Read directly from the chunk cache (works for worker-backed file types).
     const chunkStart = Math.floor(visibleRow / CHUNK_SIZE) * CHUNK_SIZE;
     const chunk = this._cache.get(chunkStart);
     const rowData = chunk?.[visibleRow - chunkStart];
@@ -843,8 +941,31 @@ class GridStore {
 
   // ── Freeze panes ──────────────────────────────────────────────────────────
 
-  toggleFreezeFirstColumn(): void {
-    this.freezeFirstColumn = !this.freezeFirstColumn;
+  toggleFreezeCol(colIndex: number): void {
+    const next = new Set(this.frozenCols);
+    if (next.has(colIndex)) {
+      next.delete(colIndex);
+    } else {
+      next.add(colIndex);
+    }
+    this.frozenCols = next;
+    this.persistSidecar();
+  }
+
+  unfreezeAllCols(): void {
+    this.frozenCols = new Set();
+    this.persistSidecar();
+  }
+
+  // ── Column reorder ────────────────────────────────────────────────────────
+
+  reorderColumn(fromVisualPos: number, toVisualPos: number): void {
+    const order = this.columnOrder ?? this.schema.map(c => c.index);
+    const newOrder = [...order];
+    const [moved] = newOrder.splice(fromVisualPos, 1);
+    newOrder.splice(toVisualPos, 0, moved);
+    this.columnOrder = newOrder;
+    this.persistSidecar();
   }
 
   // ── Statistics ────────────────────────────────────────────────────────────
@@ -1027,7 +1148,10 @@ class GridStore {
   }
 
   get visibleSchema(): ColumnSchema[] {
-    return this.schema.filter(c => !this.hiddenCols.has(c.index));
+    const base = this.columnOrder
+      ? this.columnOrder.map(i => this.schema[i]).filter((c): c is ColumnSchema => !!c)
+      : [...this.schema];
+    return base.filter(c => !this.hiddenCols.has(c.index));
   }
 
   // ── Message handlers ──────────────────────────────────────────────────────
@@ -1061,18 +1185,20 @@ class GridStore {
     this.totalRows = rows.length;
     this.filteredRows = rows.length;
     this._csvAllRows = rows;
+    this.rowCapWarning = null;
     this._computeAutoWidths(schema, rows);
     this._applyPendingSidecar();
-    this._storeChunk(0, rows.slice(0, CHUNK_SIZE));
-    if (this.filters.length > 0 || this.sort) this._invalidateCache();
+    this._ensureInMemoryView();
+    this.cacheVersion++;
     uiStore.setLoading(false);
   }
 
   private _requestChunk(startRow: number, endRow: number): void {
-    if (this.fileType === 'csv' || this.fileType === 'sqlite' || this.fileType === 'avro' || this.fileType === 'orc') {
-      this._serveCsvChunk(startRow, endRow);
-      return;
-    }
+    if (this._isInMemoryTable()) return;
+    // Skip if this chunk is already being built — prevents per-frame re-entry
+    // during streaming when rows aren't available yet.
+    if (this._pendingChunks.has(startRow)) return;
+    this._pendingChunks.add(startRow);
 
     // Worker may still be initialising — queue via the ready promise.
     this._getOrCreateWorker().then(worker => {
@@ -1099,64 +1225,76 @@ class GridStore {
     }).catch(e => uiStore.setError(String(e)));
   }
 
-  private _serveCsvChunk(startRow: number, endRow: number): void {
-    const hasFilter = this.filters.length > 0;
-    const q = this.globalSearch.trim().toLowerCase();
-    const hasSearch = q.length > 0;
-    const hasSort = !!this.sort;
+  private async _rebuildViewAsync(fingerprint: string): Promise<void> {
+    this._viewBuilding = true;
+    this._viewFingerprint = fingerprint; // Lock to prevent concurrent rebuilds
+    uiStore.setLoading(true, 'Sorting…');
 
-    if (!hasFilter && !hasSearch && !hasSort) {
-      // Identity mapping — clear the override so _actualRowIndex returns row as-is.
-      if (this._viewToActual.length !== 0 || this._viewFingerprint !== '') {
-        this._viewToActual = [];
-        this._viewFingerprint = '';
-        this.filteredRows = this._csvAllRows.length;
+    await new Promise<void>(r => setTimeout(r, 0));
+
+    const filters = this.filters.slice();
+    const sort = this.sort ? { ...this.sort } : null;
+    const q = this.globalSearch.trim().toLowerCase();
+    const hasFilter = filters.length > 0;
+    const hasSearch = q.length > 0;
+    const hasSort = !!sort;
+    const n = this._csvAllRows.length;
+
+    // Filter pass — index-only, no object allocation
+    let filtered: number[];
+    if (hasFilter || hasSearch) {
+      filtered = [];
+      for (let i = 0; i < n; i++) {
+        const row = this._csvAllRows[i];
+        if (hasFilter && !filters.every(f => applyFilter(row, f))) continue;
+        if (hasSearch && !row.some(cell => String(cell ?? '').toLowerCase().includes(q))) continue;
+        filtered.push(i);
       }
-      const sliced = this._csvAllRows.slice(startRow, Math.min(endRow, this._csvAllRows.length));
-      this._storeChunk(startRow, sliced);
+    } else {
+      filtered = Array.from({ length: n }, (_, i) => i);
+    }
+
+    await new Promise<void>(r => setTimeout(r, 0));
+
+    // Abort if state changed while we were filtering
+    const currentFp = JSON.stringify({
+      filters: this.filters,
+      sort: this.sort,
+      q: this.globalSearch.trim().toLowerCase(),
+      rows: this._csvStreaming ? this._csvAllRows.length : undefined,
+    });
+    if (currentFp !== fingerprint) {
+      this._viewFingerprint = '';
+      this._viewBuilding = false;
+      uiStore.setLoading(false);
+      this.cacheVersion++; // Nudge DataGrid to retry _serveCsvChunk with new fingerprint
       return;
     }
 
-    // Recompute the filtered+sorted index only when filters/sort/search changed.
-    // Scrolling doesn't change this fingerprint, so repeated chunk requests for
-    // different viewport windows reuse the existing _viewToActual array.
-    const fingerprint = JSON.stringify({ filters: this.filters, sort: this.sort, q });
-    if (fingerprint !== this._viewFingerprint) {
-      // Build pairs of (row, actualIndex) so we don't lose the original index after
-      // filter/sort. Critical for row mutations (delete/duplicate/insert) under a filtered view.
-      let pairs: { row: CellValue[]; idx: number }[] = this._csvAllRows.map((row, idx) => ({ row, idx }));
-
-      if (hasFilter) {
-        pairs = pairs.filter(p => this.filters.every(f => applyFilter(p.row, f)));
-      }
-      if (hasSearch) {
-        pairs = pairs.filter(p => p.row.some(cell => String(cell ?? '').toLowerCase().includes(q)));
-      }
-      if (hasSort) {
-        const { colIndex, direction } = this.sort!;
-        pairs = [...pairs].sort((a, b) => compareValues(a.row[colIndex], b.row[colIndex], direction));
-      }
-
-      this._viewToActual = pairs.map(p => p.idx);
-      this._viewFingerprint = fingerprint;
-      this.filteredRows = pairs.length;
+    // Sort pass — in-place on index array, no extra allocations
+    if (hasSort) {
+      const { colIndex, direction } = sort!;
+      const rows = this._csvAllRows;
+      filtered.sort((a, b) => compareValues(rows[a][colIndex], rows[b][colIndex], direction));
+      await new Promise<void>(r => setTimeout(r, 0));
     }
 
-    const slicedPairs = this._viewToActual
-      .slice(startRow, Math.min(endRow, this._viewToActual.length))
-      .map(idx => this._csvAllRows[idx]);
-    this._storeChunk(startRow, slicedPairs);
+    this._viewToActual = filtered;
+    this._viewFingerprint = fingerprint;
+    this.filteredRows = filtered.length;
+    this._viewBuilding = false;
+    this.cacheVersion++;
+    uiStore.setLoading(false);
   }
 
   // Translate a visible row index (the one DataGrid renders) into the actual
   // index inside _csvAllRows. With no filter/sort/search this is identity.
   private _actualRowIndex(visibleRow: number): number {
-    if (this._viewToActual.length === 0) return visibleRow;
-    if (visibleRow >= this._viewToActual.length) return this._csvAllRows.length - 1;
-    return this._viewToActual[visibleRow] ?? visibleRow;
+    return mapVisibleRow(visibleRow, this._viewToActual, this._csvAllRows.length);
   }
 
   private _storeChunk(startRow: number, rows: CellValue[][]): void {
+    this._pendingChunks.delete(startRow);
     this._cache.set(startRow, rows);
     this._accessOrder = [...this._accessOrder.filter(k => k !== startRow), startRow];
 
@@ -1172,7 +1310,13 @@ class GridStore {
     this._accessOrder = [];
     this._viewFingerprint = '';
     this.cacheVersion++;
-    this._requestChunk(this.visibleStartRow, this.visibleEndRow + CHUNK_SIZE);
+    // Only request immediately if data is available; during streaming the
+    // chunk request will return empty and cacheVersion bumps drive re-render.
+    if (!this._isInMemoryTable()) {
+      this._requestChunk(this.visibleStartRow, this.visibleEndRow + CHUNK_SIZE);
+    } else {
+      this._ensureInMemoryView();
+    }
   }
 
   private _handleDuckWorkerMsg(msg: DuckDbWorkerOut): void {
@@ -1250,6 +1394,16 @@ class GridStore {
       if (sidecar.colorsActive) {
         this.toggleColColors();
       }
+
+      // Column order
+      if (sidecar.columnOrder?.length) {
+        this.columnOrder = sidecar.columnOrder;
+      }
+
+      // Frozen columns
+      if (sidecar.frozenCols?.length) {
+        this.frozenCols = new Set(sidecar.frozenCols);
+      }
     } finally {
       this._applyingSidecar = false;
     }
@@ -1290,6 +1444,8 @@ class GridStore {
       filters,
       colorsActive: this.colColors.size > 0,
       sort: sortName ? { column: sortName, direction: this.sort!.direction } : null,
+      columnOrder: this.columnOrder ?? undefined,
+      frozenCols: this.frozenCols.size > 0 ? [...this.frozenCols] : undefined,
     };
   }
 

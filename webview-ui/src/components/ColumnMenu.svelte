@@ -13,6 +13,8 @@
 
   const col = $derived(gridStore.schema[colIndex]);
   const isCsv = $derived(gridStore.fileType === 'csv');
+  const frozenCols = $derived(gridStore.frozenCols);
+  const isCurrentlyFrozen = $derived(frozenCols.has(colIndex));
   const isSorted = $derived(gridStore.sort?.colIndex === colIndex);
   const sortDir = $derived(gridStore.sort?.direction);
 
@@ -146,6 +148,25 @@
       </button>
     </div>
   {/if}
+
+  <div class="menu-divider"></div>
+
+  <div class="menu-section">
+    {#if isCurrentlyFrozen}
+      <button class="menu-item" onclick={() => act(() => gridStore.toggleFreezeCol(colIndex))}>
+        <span class="menu-icon">📌</span> Unfreeze column
+      </button>
+      {#if frozenCols.size > 1}
+        <button class="menu-item" onclick={() => act(() => gridStore.unfreezeAllCols())}>
+          <span class="menu-icon">✕</span> Unfreeze all columns
+        </button>
+      {/if}
+    {:else}
+      <button class="menu-item" onclick={() => act(() => gridStore.toggleFreezeCol(colIndex))}>
+        <span class="menu-icon">📌</span> Freeze column
+      </button>
+    {/if}
+  </div>
 
   <div class="menu-divider"></div>
 

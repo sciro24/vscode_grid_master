@@ -88,6 +88,7 @@ export type WebviewMessage =
   | { type: 'SAVE_SIDECAR';          payload: SaveSidecarPayload }
   | { type: 'UPDATE_DELIMITER';       payload: UpdateDelimiterPayload }
   | { type: 'LARGE_FILE_OPEN_CONFIRM' }
+  | { type: 'LARGE_FILE_OPEN_PREVIEW' }
   | { type: 'LARGE_FILE_OPEN_CANCEL' }
   | { type: 'LARGE_FILE_STREAM_CANCEL' };
 

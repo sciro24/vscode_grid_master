@@ -268,13 +268,27 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
           const mb = Math.round(totalBytes / (1024 * 1024));
           // Show in-webview warning; wait for user to confirm or cancel.
           panel.webview.postMessage({ type: '__LARGE_FILE_WARNING__', payload: { fileSizeMb: mb } });
-          const confirmed = await new Promise<boolean>((resolve) => {
+          const choice = await new Promise<'full' | 'preview' | 'cancel'>((resolve) => {
+            let resolved = false;
+            const finish = (value: 'full' | 'preview' | 'cancel') => {
+              if (resolved) return;
+              resolved = true;
+              clearTimeout(timeout);
+              sub.dispose();
+              disposeSub.dispose();
+              resolve(value);
+            };
             const sub = panel.webview.onDidReceiveMessage((m) => {
-              if (m.type === 'LARGE_FILE_OPEN_CONFIRM') { sub.dispose(); resolve(true); }
-              else if (m.type === 'LARGE_FILE_OPEN_CANCEL') { sub.dispose(); resolve(false); }
+              if (m.type === 'LARGE_FILE_OPEN_CONFIRM') finish('full');
+              else if (m.type === 'LARGE_FILE_OPEN_PREVIEW') finish('preview');
+              else if (m.type === 'LARGE_FILE_OPEN_CANCEL') finish('cancel');
             });
+            const disposeSub = panel.onDidDispose(() => finish('cancel'));
+            const timeout = setTimeout(() => finish('cancel'), 60_000);
           });
-          if (!confirmed) { panel.dispose(); return; }
+          if (choice === 'cancel') { panel.dispose(); return; }
+          const previewOnly = choice === 'preview';
+          const PREVIEW_ROW_LIMIT = 100_000;
           send({
             type: 'INIT',
             payload: {
@@ -287,8 +301,8 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
               sidecar: document.sidecar,
             },
           });
-          send({ type: 'LOADING', payload: { active: true, message: 'Parsing large CSV…' } });
-          await this._streamParseLargeCsv(document.uri, panel, send);
+          send({ type: 'LOADING', payload: { active: true, message: previewOnly ? 'Loading preview…' : 'Parsing large CSV…' } });
+          await this._streamParseLargeCsv(document.uri, panel, send, previewOnly ? PREVIEW_ROW_LIMIT : undefined);
           send({ type: 'LOADING', payload: { active: false } });
         } else {
           const raw = await GridEditorProvider._fileReader.readAll(document.uri);
@@ -481,6 +495,7 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
     uri: vscode.Uri,
     panel: vscode.WebviewPanel,
     send: (m: HostMessage) => void,
+    rowLimit?: number,
   ): Promise<void> {
     // Stream-parse the file row-by-row, batching parsed rows into small
     // structured-clone postMessages. VS Code's IPC layer between extension
@@ -497,6 +512,7 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
     let pendingBatch: CellValue[][] = [];
     let schemaSent = false;
     let totalRowsSent = 0;
+    let rowsAccepted = 0;
     let lastCursor = 0;
 
     const flushBatch = (final: boolean): void => {
@@ -528,7 +544,7 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
       if (final) {
         panel.webview.postMessage({
           type: '__RAW_CSV_BATCH__',
-          payload: { rows: [], done: true, kind: 'done', totalRows: totalRowsSent },
+          payload: { rows: [], done: true, kind: 'done', totalRows: totalRowsSent, previewOnly: rowLimit !== undefined },
         });
       }
     };
@@ -557,11 +573,23 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
           const coerced = row.map(coerceCell);
           if (sampleRows.length < TYPE_SAMPLE_ROWS && !schemaSent) {
             sampleRows.push(coerced);
+            rowsAccepted += 1;
             if (sampleRows.length >= TYPE_SAMPLE_ROWS) flushBatch(false);
+            if (rowLimit !== undefined && rowsAccepted >= rowLimit) {
+              flushBatch(false);
+              cancelled = true;
+              parser.abort();
+            }
             return;
           }
           pendingBatch.push(coerced);
+          rowsAccepted += 1;
           if (pendingBatch.length >= BATCH_ROWS) flushBatch(false);
+          if (rowLimit !== undefined && rowsAccepted >= rowLimit) {
+            flushBatch(false);
+            cancelled = true;
+            parser.abort();
+          }
         },
         complete: () => { cancelSub.dispose(); resolve(); },
         error: (err: Error) => { cancelSub.dispose(); parseError = String(err); resolve(); },
@@ -737,8 +765,33 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
       return;
     }
 
-    const colNames: string[] = JSON.parse(lines[0]);
-    const rawRows: Record<string, unknown>[] = lines.slice(1).map(l => JSON.parse(l));
+    let colNames: string[];
+    let rawRows: Record<string, unknown>[];
+    try {
+      const parsed = JSON.parse(lines[0]) as unknown;
+      if (!Array.isArray(parsed) || !parsed.every(v => typeof v === 'string')) {
+        throw new Error('ORC header is not a string array');
+      }
+      colNames = parsed as string[];
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      send({ type: 'ERROR', payload: { code: 'READ_ERROR', message: `ORC header parse failed: ${msg}` } });
+      return;
+    }
+    try {
+      rawRows = lines.slice(1).map((l, i) => {
+        try {
+          return JSON.parse(l) as Record<string, unknown>;
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e);
+          throw new Error(`ORC row ${i + 1} parse failed: ${msg}`);
+        }
+      });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      send({ type: 'ERROR', payload: { code: 'READ_ERROR', message: msg } });
+      return;
+    }
 
     const schema: ColumnSchema[] = colNames.map((name, index) => {
       let inferredType: InferredType = 'string';

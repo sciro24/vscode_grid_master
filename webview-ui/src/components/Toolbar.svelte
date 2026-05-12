@@ -62,7 +62,7 @@
   const isDirty = $derived(uiStore.isDirty);
   const colorsActive = $derived(gridStore.colColors.size > 0);
   const canUndo = $derived(gridStore.editCount > 0);
-  const freezeFirstCol = $derived(gridStore.freezeFirstColumn);
+
 </script>
 
 <div class="toolbar" onclick={onToolbarClick} role="presentation">
@@ -119,19 +119,6 @@
       <!-- Bar chart icon -->
       <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
         <path d="M2 13h2v-3H2v3zm3.5 0h2V7h-2v6zm3.5 0h2V4H9v9zm3.5 0h2V1h-2v12zM1 14.5h14V16H1v-1.5z"/>
-      </svg>
-    </button>
-
-    <button
-      class="btn btn-ghost"
-      class:btn-active={freezeFirstCol}
-      onclick={() => gridStore.toggleFreezeFirstColumn()}
-      title={freezeFirstCol ? 'Unfreeze first column' : 'Freeze first column (keep it visible while scrolling)'}
-    >
-      <!-- Pin/snowflake icon -->
-      <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
-        <path d="M8 0v4M8 12v4M0 8h4M12 8h4M2.3 2.3l2.8 2.8M10.9 10.9l2.8 2.8M2.3 13.7l2.8-2.8M10.9 5.1l2.8-2.8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" fill="none"/>
-        <circle cx="8" cy="8" r="1.6"/>
       </svg>
     </button>
 
