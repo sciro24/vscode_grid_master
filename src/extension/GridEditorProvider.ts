@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as fs from 'fs';
+import Papa from 'papaparse';
 import { DocumentModel } from './DocumentModel.js';
 import { FileReaderService } from './FileReaderService.js';
 import { detectFileType } from './utils/fileTypeDetector.js';
@@ -258,24 +260,56 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
       }
 
       if (document.fileType === 'csv') {
-        const raw = await GridEditorProvider._fileReader.readAll(document.uri);
-        const text = new TextDecoder('utf-8').decode(raw);
+        // Files large enough that a single UTF-8 decoded string would exceed
+        // V8's ~512 MB string limit (0x1fffffe8) need to be parsed host-side
+        // via a Node read stream instead of shipped as one giant text payload.
+        const LARGE_CSV_THRESHOLD = 256 * 1024 * 1024; // ~256 MB on-disk
+        if (totalBytes > LARGE_CSV_THRESHOLD) {
+          const mb = Math.round(totalBytes / (1024 * 1024));
+          // Show in-webview warning; wait for user to confirm or cancel.
+          panel.webview.postMessage({ type: '__LARGE_FILE_WARNING__', payload: { fileSizeMb: mb } });
+          const confirmed = await new Promise<boolean>((resolve) => {
+            const sub = panel.webview.onDidReceiveMessage((m) => {
+              if (m.type === 'LARGE_FILE_OPEN_CONFIRM') { sub.dispose(); resolve(true); }
+              else if (m.type === 'LARGE_FILE_OPEN_CANCEL') { sub.dispose(); resolve(false); }
+            });
+          });
+          if (!confirmed) { panel.dispose(); return; }
+          send({
+            type: 'INIT',
+            payload: {
+              fileType: 'csv',
+              fileName,
+              totalRows: -1,
+              totalBytes,
+              schema: [],
+              firstChunk: { rows: [], startRow: 0, endRow: 0 },
+              sidecar: document.sidecar,
+            },
+          });
+          send({ type: 'LOADING', payload: { active: true, message: 'Parsing large CSV…' } });
+          await this._streamParseLargeCsv(document.uri, panel, send);
+          send({ type: 'LOADING', payload: { active: false } });
+        } else {
+          const raw = await GridEditorProvider._fileReader.readAll(document.uri);
+          const text = new TextDecoder('utf-8').decode(raw);
 
-        send({
-          type: 'INIT',
-          payload: {
-            fileType: 'csv',
-            fileName,
-            totalRows: -1,
-            totalBytes,
-            schema: [],
-            firstChunk: { rows: [], startRow: 0, endRow: 0 },
-            sidecar: document.sidecar,
-          },
-        });
+          send({
+            type: 'INIT',
+            payload: {
+              fileType: 'csv',
+              fileName,
+              totalRows: -1,
+              totalBytes,
+              schema: [],
+              firstChunk: { rows: [], startRow: 0, endRow: 0 },
+              sidecar: document.sidecar,
+            },
+          });
 
-        panel.webview.postMessage({ type: '__RAW_CSV__', payload: { text, totalBytes } });
-        // LOADING:false is sent by the webview after it finishes parsing CSV inline.
+          panel.webview.postMessage({ type: '__RAW_CSV__', payload: { text, totalBytes } });
+          // LOADING:false is sent by the webview after it finishes parsing CSV inline.
+        }
       } else if (document.fileType === 'json') {
         const bytes = await GridEditorProvider._fileReader.readAll(document.uri);
         const ext = path.extname(document.uri.fsPath).toLowerCase();
@@ -295,11 +329,18 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
           },
         });
 
-        const base64 = Buffer.from(bytes).toString('base64');
-        panel.webview.postMessage({
-          type: '__RAW_BINARY__',
-          payload: { base64, fileType: 'json', jsonFormat: isNdjson ? 'ndjson' : 'json', duckBundles },
-        });
+        const jsonParts = GridEditorProvider._encodeBase64Chunked(bytes);
+        if (jsonParts.length === 1) {
+          panel.webview.postMessage({
+            type: '__RAW_BINARY__',
+            payload: { base64: jsonParts[0], fileType: 'json', jsonFormat: isNdjson ? 'ndjson' : 'json', duckBundles },
+          });
+        } else {
+          panel.webview.postMessage({
+            type: '__RAW_BINARY__',
+            payload: { base64Parts: jsonParts, singleFileSplit: true, fileType: 'json', jsonFormat: isNdjson ? 'ndjson' : 'json', duckBundles },
+          });
+        }
         send({ type: 'LOADING', payload: { active: false } });
       } else {
         // excel is a single-buffer binary format handled in the webview worker
@@ -320,11 +361,18 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
               duckWorkerUrl,
             },
           });
-          const base64 = Buffer.from(bytes).toString('base64');
-          panel.webview.postMessage({
-            type: '__RAW_BINARY__',
-            payload: { base64, fileType: document.fileType, duckBundles },
-          });
+          const xlsxParts = GridEditorProvider._encodeBase64Chunked(bytes);
+          if (xlsxParts.length === 1) {
+            panel.webview.postMessage({
+              type: '__RAW_BINARY__',
+              payload: { base64: xlsxParts[0], fileType: document.fileType, duckBundles },
+            });
+          } else {
+            panel.webview.postMessage({
+              type: '__RAW_BINARY__',
+              payload: { base64Parts: xlsxParts, singleFileSplit: true, fileType: document.fileType, duckBundles },
+            });
+          }
           send({ type: 'LOADING', payload: { active: false } });
         } else {
           // parquet / arrow — check for partitioned directory (Spark-style).
@@ -378,12 +426,22 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
           });
 
           if (partFiles.length === 1) {
-            const base64 = Buffer.from(partFiles[0]).toString('base64');
-            panel.webview.postMessage({
-              type: '__RAW_BINARY__',
-              payload: { base64, fileType: document.fileType, duckBundles },
-            });
+            const chunks = GridEditorProvider._encodeBase64Chunked(partFiles[0]);
+            if (chunks.length === 1) {
+              panel.webview.postMessage({
+                type: '__RAW_BINARY__',
+                payload: { base64: chunks[0], fileType: document.fileType, duckBundles },
+              });
+            } else {
+              panel.webview.postMessage({
+                type: '__RAW_BINARY__',
+                payload: { base64Parts: chunks, singleFileSplit: true, fileType: document.fileType, duckBundles },
+              });
+            }
           } else {
+            // Partitioned dataset: each part is its own file. Encode each
+            // part directly — if any single part exceeds ~512 MB it would
+            // throw, but Spark-style part-files are typically far smaller.
             const parts = partFiles.map(b => Buffer.from(b).toString('base64'));
             panel.webview.postMessage({
               type: '__RAW_BINARY__',
@@ -410,6 +468,115 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
       return;
     }
     document.clearPatches();
+  }
+
+  // Stream-parse a CSV/TSV file that is too large to UTF-8 decode in one shot
+  // (V8 string limit ~512 MB). Uses a Node read stream + Papa.parse with a
+  // step callback so we never hold the full file as a single string. Rows are
+  // accumulated as CellValue[][] (each cell is its own small string), schema
+  // is inferred from the first sample, and everything is shipped to the
+  // webview in a single structured-clone postMessage (no string-size limit
+  // applies to arrays of small strings).
+  private async _streamParseLargeCsv(
+    uri: vscode.Uri,
+    panel: vscode.WebviewPanel,
+    send: (m: HostMessage) => void,
+  ): Promise<void> {
+    // Stream-parse the file row-by-row, batching parsed rows into small
+    // structured-clone postMessages. VS Code's IPC layer between extension
+    // host and webview can serialize message payloads as JSON internally,
+    // which would re-introduce the V8 string limit if we sent millions of
+    // rows in one shot. Batching keeps each serialized message comfortably
+    // small (~50 MB JSON at 100k rows × moderate column count).
+    const TYPE_SAMPLE_ROWS = 1000;
+    const BATCH_ROWS = 100_000;
+    const sampleRows: CellValue[][] = [];
+    let headers: string[] | null = null;
+    let detectedDelimiter = ',';
+    let parseError: string | null = null;
+    let pendingBatch: CellValue[][] = [];
+    let schemaSent = false;
+    let totalRowsSent = 0;
+    let lastCursor = 0;
+
+    const flushBatch = (final: boolean): void => {
+      if (!schemaSent && (sampleRows.length >= TYPE_SAMPLE_ROWS || final) && headers) {
+        const schema = inferSchema(headers, sampleRows);
+        panel.webview.postMessage({
+          type: '__RAW_CSV_BATCH__',
+          payload: { schema, delimiter: detectedDelimiter, rows: [], done: false, kind: 'init' },
+        });
+        // Sample rows themselves go out as the first data batch.
+        if (sampleRows.length > 0) {
+          panel.webview.postMessage({
+            type: '__RAW_CSV_BATCH__',
+            payload: { rows: sampleRows, done: false, kind: 'rows', bytesRead: lastCursor },
+          });
+          totalRowsSent += sampleRows.length;
+        }
+        schemaSent = true;
+      }
+      if (!schemaSent) return; // still buffering sample
+      if (pendingBatch.length > 0) {
+        panel.webview.postMessage({
+          type: '__RAW_CSV_BATCH__',
+          payload: { rows: pendingBatch, done: false, kind: 'rows', bytesRead: lastCursor },
+        });
+        totalRowsSent += pendingBatch.length;
+        pendingBatch = [];
+      }
+      if (final) {
+        panel.webview.postMessage({
+          type: '__RAW_CSV_BATCH__',
+          payload: { rows: [], done: true, kind: 'done', totalRows: totalRowsSent },
+        });
+      }
+    };
+
+    await new Promise<void>((resolve) => {
+      let cancelled = false;
+      const cancelSub = panel.webview.onDidReceiveMessage((m) => {
+        if (m.type === 'LARGE_FILE_STREAM_CANCEL') cancelled = true;
+      });
+
+      const stream = fs.createReadStream(uri.fsPath, { encoding: 'utf8' });
+      Papa.parse<string[]>(stream as unknown as NodeJS.ReadableStream, {
+        delimiter: '',
+        skipEmptyLines: true,
+        header: false,
+        step: (results, parser) => {
+          if (cancelled) { parser.abort(); return; }
+          if (results.meta?.delimiter) detectedDelimiter = results.meta.delimiter;
+          if (typeof results.meta?.cursor === 'number') lastCursor = results.meta.cursor;
+          const row = results.data as unknown as string[];
+          if (!Array.isArray(row)) return;
+          if (!headers) {
+            headers = row;
+            return;
+          }
+          const coerced = row.map(coerceCell);
+          if (sampleRows.length < TYPE_SAMPLE_ROWS && !schemaSent) {
+            sampleRows.push(coerced);
+            if (sampleRows.length >= TYPE_SAMPLE_ROWS) flushBatch(false);
+            return;
+          }
+          pendingBatch.push(coerced);
+          if (pendingBatch.length >= BATCH_ROWS) flushBatch(false);
+        },
+        complete: () => { cancelSub.dispose(); resolve(); },
+        error: (err: Error) => { cancelSub.dispose(); parseError = String(err); resolve(); },
+      });
+    });
+
+    if (parseError && totalRowsSent === 0 && sampleRows.length === 0) {
+      send({ type: 'ERROR', payload: { code: 'PARSE_ERROR', message: parseError } });
+      return;
+    }
+    if (!headers) {
+      send({ type: 'ERROR', payload: { code: 'PARSE_ERROR', message: 'CSV file is empty' } });
+      return;
+    }
+    flushBatch(true);
   }
 
   // ── SQLite: read host-side, send rows as JSON ─────────────────────────────
@@ -764,4 +931,57 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
   private _nonce(): string {
     return require('crypto').randomBytes(16).toString('base64url') as string;
   }
+
+  // V8 limits any single string to ~512 MB (0x1fffffe8 chars). A 1 GB file
+  // base64-encoded in one shot exceeds that, so split the source bytes into
+  // 48 MB raw slices (~64 MB base64 each). The webview concatenates the
+  // decoded chunks back into one ArrayBuffer before handing it to the worker.
+  private static readonly _BASE64_CHUNK_BYTES = 48 * 1024 * 1024;
+
+  private static _encodeBase64Chunked(bytes: Uint8Array): string[] {
+    const step = GridEditorProvider._BASE64_CHUNK_BYTES;
+    if (bytes.byteLength <= step) {
+      return [Buffer.from(bytes).toString('base64')];
+    }
+    const parts: string[] = [];
+    for (let off = 0; off < bytes.byteLength; off += step) {
+      const end = Math.min(off + step, bytes.byteLength);
+      const slice = bytes.subarray(off, end);
+      parts.push(Buffer.from(slice).toString('base64'));
+    }
+    return parts;
+  }
+}
+
+// ── CSV cell coercion + schema inference (host-side mirror of webview logic) ─
+
+function coerceCell(raw: string): CellValue {
+  if (raw === '' || raw === 'null' || raw === 'NULL' || raw === 'NA' || raw === 'N/A') return null;
+  const n = Number(raw);
+  if (!isNaN(n) && raw.trim() !== '') return n;
+  const lower = raw.toLowerCase();
+  if (lower === 'true') return true;
+  if (lower === 'false') return false;
+  return raw;
+}
+
+function isDateLike(s: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}/.test(s) || /^\d{2}[\/\-]\d{2}[\/\-]\d{4}/.test(s);
+}
+
+function inferTypeFromSamples(samples: CellValue[]): InferredType {
+  const nonNull = samples.filter(v => v !== null);
+  if (nonNull.length === 0) return 'null';
+  if (nonNull.every(v => typeof v === 'number')) return 'number';
+  if (nonNull.every(v => typeof v === 'boolean')) return 'boolean';
+  if (nonNull.every(v => typeof v === 'string' && isDateLike(v as string))) return 'date';
+  return 'string';
+}
+
+function inferSchema(headers: string[], sampleRows: CellValue[][]): ColumnSchema[] {
+  return headers.map((name, index) => {
+    const samples = sampleRows.map(row => row[index] ?? null);
+    const nullCount = samples.filter(v => v === null).length;
+    return { name, index, inferredType: inferTypeFromSamples(samples), nullable: nullCount > 0 };
+  });
 }

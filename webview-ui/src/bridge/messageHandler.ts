@@ -6,13 +6,22 @@ import { gridStore } from '../stores/grid.svelte.js';
 import { uiStore } from '../stores/ui.svelte.js';
 
 type RawCsvMessage    = { type: '__RAW_CSV__';    payload: { text: string; totalBytes: number } };
+type RawCsvBatchMessage = { type: '__RAW_CSV_BATCH__'; payload: {
+  schema?: ColumnSchema[];
+  delimiter?: string;
+  rows: CellValue[][];
+  done: boolean;
+  kind: 'init' | 'rows' | 'done';
+  totalRows?: number;
+  bytesRead?: number;
+} };
 type DuckBundles = {
   parquetWasmB64?: string;
 };
 
-type RawBinaryMessage = { type: '__RAW_BINARY__'; payload: { base64?: string; base64Parts?: string[]; fileType: 'parquet' | 'arrow' | 'json' | 'excel' | 'avro'; jsonFormat?: 'json' | 'ndjson'; duckBundles: DuckBundles } };
+type RawBinaryMessage = { type: '__RAW_BINARY__'; payload: { base64?: string; base64Parts?: string[]; singleFileSplit?: boolean; fileType: 'parquet' | 'arrow' | 'json' | 'excel' | 'avro'; jsonFormat?: 'json' | 'ndjson'; duckBundles: DuckBundles } };
 type RawRowsMessage   = { type: '__RAW_ROWS__';   payload: { schema: ColumnSchema[]; rows: CellValue[][] } };
-type AnyMessage = HostMessage | RawCsvMessage | RawBinaryMessage | RawRowsMessage;
+type AnyMessage = HostMessage | RawCsvMessage | RawCsvBatchMessage | RawBinaryMessage | RawRowsMessage;
 
 export function setupMessageHandler(): () => void {
   const handler = (event: MessageEvent) => {
@@ -55,16 +64,32 @@ export function setupMessageHandler(): () => void {
         gridStore.receiveColumnStats(msg.payload);
         break;
 
+      case '__LARGE_FILE_WARNING__':
+        uiStore.setLargeFileWarning({ fileSizeMb: msg.payload.fileSizeMb });
+        break;
+
       case '__RAW_CSV__':
         parseCsvInline(msg.payload.text, msg.payload.totalBytes);
         break;
 
+      case '__RAW_CSV_BATCH__':
+        handleCsvBatch(msg.payload);
+        break;
+
       case '__RAW_BINARY__': {
-        const { fileType, duckBundles, jsonFormat, base64, base64Parts } = msg.payload;
+        const { fileType, duckBundles, jsonFormat, base64, base64Parts, singleFileSplit } = msg.payload;
         if (base64Parts && base64Parts.length > 0) {
-          console.log('[GM] __RAW_BINARY__', fileType, 'parts=', base64Parts.length);
-          const buffers = base64Parts.map(b64ToArrayBuffer);
-          gridStore.loadRawBinaryParts(buffers, fileType, duckBundles);
+          console.log('[GM] __RAW_BINARY__', fileType, 'parts=', base64Parts.length, 'split=', !!singleFileSplit);
+          if (singleFileSplit) {
+            // One logical file was split into base64 chunks to avoid the V8
+            // 512 MB string limit on the host side. Decode each chunk and
+            // concatenate into a single ArrayBuffer before handing to the worker.
+            const combined = concatBase64Chunks(base64Parts);
+            gridStore.loadRawBinary(combined, fileType as 'parquet' | 'arrow' | 'json', duckBundles, jsonFormat);
+          } else {
+            const buffers = base64Parts.map(b64ToArrayBuffer);
+            gridStore.loadRawBinaryParts(buffers, fileType as 'parquet' | 'arrow', duckBundles);
+          }
         } else if (base64) {
           console.log('[GM] __RAW_BINARY__', fileType, 'base64 len', base64.length);
           gridStore.loadRawBinary(b64ToArrayBuffer(base64), fileType, duckBundles, jsonFormat);
@@ -87,9 +112,118 @@ export function setupMessageHandler(): () => void {
 // Uint8Array.from is faster than a manual charCodeAt loop for large payloads
 // because the engine can optimise the typed-array fill internally.
 
+// ── Streamed CSV batch accumulator ────────────────────────────────────────────
+// Host sends multiple __RAW_CSV_BATCH__ messages for large files (>256 MB).
+// 'init'  → schema + delimiter
+// 'rows'  → up to 100k rows per message; first batch triggers grid render
+// 'done'  → authoritative row count, finalize display
+//
+// RAF coalescing: subsequent row batches are queued and flushed at most 50k rows
+// per animation frame so rapid IPC bursts don't block the main thread.
+//
+// Row cap: webview stores at most MAX_WEBVIEW_ROWS rows to prevent OOM crashes
+// on very large files. When the cap is hit, a cancel message is sent to the host
+// so streaming stops early.
+
+const MAX_WEBVIEW_ROWS = 1_000_000;
+const MAX_FLUSH_PER_RAF = 50_000;
+
+let _csvStreamSchema: ColumnSchema[] | null = null;
+let _csvStreamDelimiter = ',';
+let _csvStreamInitialized = false;
+let _pendingAppendRows: CellValue[][] = [];
+let _rafPending = false;
+let _streamCapped = false;
+
+function _flushPendingAppend(): void {
+  const toFlush = _pendingAppendRows.splice(0, MAX_FLUSH_PER_RAF);
+  if (toFlush.length > 0) {
+    gridStore.appendCsvRows(toFlush);
+  }
+  if (_pendingAppendRows.length > 0) {
+    requestAnimationFrame(_flushPendingAppend);
+  } else {
+    _rafPending = false;
+  }
+}
+
+function _capStream(): void {
+  _streamCapped = true;
+  _pendingAppendRows = [];
+  _rafPending = false;
+  gridStore.finalizeCsvRows(gridStore.totalRows);
+  gridStore.setRowCapWarning(true);
+  uiStore.setLoading(false);
+  postMessage({ type: 'LARGE_FILE_STREAM_CANCEL' });
+}
+
+function handleCsvBatch(p: {
+  schema?: ColumnSchema[];
+  delimiter?: string;
+  rows: CellValue[][];
+  done: boolean;
+  kind: 'init' | 'rows' | 'done';
+  totalRows?: number;
+  bytesRead?: number;
+}): void {
+  if (p.kind === 'init') {
+    _csvStreamSchema = p.schema ?? [];
+    _csvStreamDelimiter = p.delimiter ?? ',';
+    _csvStreamInitialized = false;
+    _pendingAppendRows = [];
+    _rafPending = false;
+    _streamCapped = false;
+    return;
+  }
+  if (_streamCapped) return;
+  if (p.kind === 'rows') {
+    if (p.rows.length === 0) return;
+    if (!_csvStreamInitialized) {
+      gridStore.receiveCsvData(_csvStreamSchema ?? [], p.rows, _csvStreamDelimiter);
+      _csvStreamInitialized = true;
+    } else {
+      const spaceLeft = MAX_WEBVIEW_ROWS - gridStore.totalRows - _pendingAppendRows.length;
+      if (spaceLeft <= 0) { _capStream(); return; }
+      const rowsToAdd = spaceLeft < p.rows.length ? p.rows.slice(0, spaceLeft) : p.rows;
+      for (const r of rowsToAdd) _pendingAppendRows.push(r);
+      if (!_rafPending) {
+        _rafPending = true;
+        requestAnimationFrame(_flushPendingAppend);
+      }
+      if (spaceLeft <= p.rows.length) { _capStream(); return; }
+    }
+    if (p.bytesRead !== undefined && gridStore.totalBytes > 0) {
+      const pct = Math.min(99, Math.round((p.bytesRead / gridStore.totalBytes) * 100));
+      uiStore.setStreamProgress(pct);
+    }
+    return;
+  }
+  // kind === 'done' — flush any remaining pending rows synchronously
+  if (_pendingAppendRows.length > 0) {
+    gridStore.appendCsvRows(_pendingAppendRows);
+    _pendingAppendRows = [];
+    _rafPending = false;
+  }
+  gridStore.finalizeCsvRows(p.totalRows ?? gridStore.totalRows);
+  uiStore.setLoading(false);
+}
+
 function b64ToArrayBuffer(b64: string): ArrayBuffer {
   const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
   return bytes.buffer;
+}
+
+// Decode N base64 chunks and concatenate the raw bytes into a single
+// ArrayBuffer. Used when a single large file was split host-side to avoid
+// the V8 ~512 MB string limit on base64 encoding.
+function concatBase64Chunks(parts: string[]): ArrayBuffer {
+  const decoded: Uint8Array[] = parts.map(p => Uint8Array.from(atob(p), c => c.charCodeAt(0)));
+  let total = 0;
+  for (const u of decoded) total += u.length;
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const u of decoded) { out.set(u, off); off += u.length; }
+  return out.buffer;
 }
 
 // ── Inline CSV parsing (synchronous, main thread, no Worker) ──────────────────

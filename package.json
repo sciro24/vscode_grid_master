@@ -267,7 +267,9 @@
     "typescript": "^5.2.0"
   },
   "dependencies": {
+    "@types/papaparse": "^5.5.2",
     "avsc": "^5.7.9",
+    "papaparse": "^5.5.3",
     "sql.js": "^1.14.1"
   }
 }

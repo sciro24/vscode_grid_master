@@ -7,12 +7,25 @@ class UiStore {
   error = $state<string | null>(null);
   saved = $state(true);
   isDirty = $state(false);
+  largeFileWarning = $state<{ fileSizeMb: number } | null>(null);
+  streamProgress = $state<number | undefined>(undefined);
 
   setLoading(active: boolean, message?: string, progress?: number): void {
     this.loading = active;
     this.loadingMessage = message ?? '';
     this.loadingProgress = progress;
-    if (!active) this.error = null;
+    if (!active) {
+      this.error = null;
+      this.streamProgress = undefined;
+    }
+  }
+
+  setLargeFileWarning(info: { fileSizeMb: number } | null): void {
+    this.largeFileWarning = info;
+  }
+
+  setStreamProgress(pct: number): void {
+    this.streamProgress = pct;
   }
 
   setError(message: string): void {

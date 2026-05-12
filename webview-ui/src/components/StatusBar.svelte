@@ -100,6 +100,9 @@
   </div>
 
   <div class="status-right">
+    {#if gridStore.rowCapWarning}
+      <span class="status-badge cap-badge" title="File too large for full display — showing first 1M rows">Truncated</span>
+    {/if}
     {#if isDirty}
       <span class="status-badge dirty-badge">Unsaved</span>
     {:else if gridStore.totalRows > 0}
@@ -183,5 +186,10 @@
   .saved-badge {
     background: rgba(80, 200, 120, 0.12);
     color: var(--gm-success);
+  }
+
+  .cap-badge {
+    background: rgba(204, 167, 0, 0.15);
+    color: var(--vscode-editorWarning-foreground, #cca700);
   }
 </style>

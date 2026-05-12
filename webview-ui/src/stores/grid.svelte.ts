@@ -215,6 +215,27 @@ class GridStore {
     if (this.filters.length > 0 || this.sort) this._invalidateCache();
   }
 
+  appendCsvRows(rows: CellValue[][]): void {
+    for (const r of rows) this._csvAllRows.push(r);
+    this.totalRows = this._csvAllRows.length;
+    this.filteredRows = this._csvAllRows.length;
+    // Don't invalidate cache — existing chunks are still valid (rows only appended at end).
+    // Bump cacheVersion so reactive row-count displays update.
+    this.cacheVersion++;
+  }
+
+  finalizeCsvRows(totalRows: number): void {
+    this.totalRows = totalRows;
+    this.filteredRows = totalRows;
+    this.cacheVersion++;
+  }
+
+  rowCapWarning = $state(false);
+
+  setRowCapWarning(v: boolean): void {
+    this.rowCapWarning = v;
+  }
+
   // Sample first N rows + header to estimate optimal column widths.
   // Uses character-count heuristic (fast, no DOM measurement needed).
   private _computeAutoWidths(schema: ColumnSchema[], rows: CellValue[][]): void {

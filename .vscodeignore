@@ -77,6 +77,8 @@ REPORT*.md
 SUMMARY*.md
 NOTES*.md
 SCRATCH*.md
+docs/superpowers/**
+docs/claude-mem/**
 
 # ── Other build artefacts (the .vsix itself) ──────────────────────────────
 *.vsix

@@ -9,6 +9,7 @@
   import DataGrid from './components/DataGrid.svelte';
   import StatusBar from './components/StatusBar.svelte';
   import LoadingOverlay from './components/LoadingOverlay.svelte';
+  import LargeFileWarning from './components/LargeFileWarning.svelte';
   import ErrorBanner from './components/ErrorBanner.svelte';
 
   let teardown: (() => void) | null = null;
@@ -38,7 +39,9 @@
   {/if}
 
   <div class="grid-area">
-    {#if uiStore.loading && !hasData}
+    {#if uiStore.largeFileWarning !== null}
+      <LargeFileWarning fileSizeMb={uiStore.largeFileWarning.fileSizeMb} />
+    {:else if uiStore.loading && !hasData}
       <LoadingOverlay message={uiStore.loadingMessage} progress={uiStore.loadingProgress} />
     {:else if hasData}
       <DataGrid />
@@ -49,6 +52,12 @@
       </div>
     {/if}
   </div>
+
+  {#if uiStore.streamProgress !== undefined}
+    <div class="stream-progress-bar">
+      <div class="stream-progress-fill" style="width: {uiStore.streamProgress}%"></div>
+    </div>
+  {/if}
 
   <StatusBar />
 </div>
@@ -85,5 +94,18 @@
   .empty-icon {
     font-size: 48px;
     opacity: 0.3;
+  }
+
+  .stream-progress-bar {
+    height: 3px;
+    background: var(--gm-border);
+    flex-shrink: 0;
+    overflow: hidden;
+  }
+
+  .stream-progress-fill {
+    height: 100%;
+    background: var(--gm-success);
+    transition: width 0.3s ease;
   }
 </style>

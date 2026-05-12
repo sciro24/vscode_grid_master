@@ -3,15 +3,16 @@ import type { ColumnSchema, ColumnStats, DataChunk, FilterSpec, SortSpec } from 
 // ── Host → Webview ───────────────────────────────────────────────────────────
 
 export type HostMessage =
-  | { type: 'INIT';           payload: InitPayload }
-  | { type: 'CHUNK';          payload: ChunkPayload }
-  | { type: 'SCHEMA_UPDATE';  payload: SchemaUpdatePayload }
-  | { type: 'EDIT_ACK';       payload: EditAckPayload }
-  | { type: 'SAVE_ACK';       payload: SaveAckPayload }
-  | { type: 'COLUMN_STATS';   payload: ColumnStatsPayload }
-  | { type: 'EXPORT_DONE';    payload: ExportDonePayload }
-  | { type: 'LOADING';        payload: LoadingPayload }
-  | { type: 'ERROR';          payload: ErrorPayload };
+  | { type: 'INIT';                   payload: InitPayload }
+  | { type: 'CHUNK';                  payload: ChunkPayload }
+  | { type: 'SCHEMA_UPDATE';          payload: SchemaUpdatePayload }
+  | { type: 'EDIT_ACK';              payload: EditAckPayload }
+  | { type: 'SAVE_ACK';              payload: SaveAckPayload }
+  | { type: 'COLUMN_STATS';          payload: ColumnStatsPayload }
+  | { type: 'EXPORT_DONE';           payload: ExportDonePayload }
+  | { type: 'LOADING';               payload: LoadingPayload }
+  | { type: 'ERROR';                 payload: ErrorPayload }
+  | { type: '__LARGE_FILE_WARNING__'; payload: LargeFileWarningPayload };
 
 export interface InitPayload {
   fileType: 'csv' | 'parquet' | 'arrow' | 'json' | 'excel' | 'avro' | 'sqlite' | 'orc';
@@ -68,20 +69,27 @@ export interface ErrorPayload {
   detail?: string;
 }
 
+export interface LargeFileWarningPayload {
+  fileSizeMb: number;
+}
+
 // ── Webview → Host ───────────────────────────────────────────────────────────
 
 export type WebviewMessage =
   | { type: 'READY' }
-  | { type: 'REQUEST_CHUNK';    payload: ChunkRequestPayload }
-  | { type: 'EDIT';             payload: EditPayload }
-  | { type: 'BATCH_EDIT';       payload: BatchEditPayload }
+  | { type: 'REQUEST_CHUNK';           payload: ChunkRequestPayload }
+  | { type: 'EDIT';                    payload: EditPayload }
+  | { type: 'BATCH_EDIT';             payload: BatchEditPayload }
   | { type: 'SAVE' }
-  | { type: 'SAVE_DATA';        payload: SaveDataPayload }
+  | { type: 'SAVE_DATA';              payload: SaveDataPayload }
   | { type: 'UNDO' }
   | { type: 'REDO' }
-  | { type: 'EXPORT';           payload: ExportPayload }
-  | { type: 'SAVE_SIDECAR';     payload: SaveSidecarPayload }
-  | { type: 'UPDATE_DELIMITER'; payload: UpdateDelimiterPayload };
+  | { type: 'EXPORT';                 payload: ExportPayload }
+  | { type: 'SAVE_SIDECAR';          payload: SaveSidecarPayload }
+  | { type: 'UPDATE_DELIMITER';       payload: UpdateDelimiterPayload }
+  | { type: 'LARGE_FILE_OPEN_CONFIRM' }
+  | { type: 'LARGE_FILE_OPEN_CANCEL' }
+  | { type: 'LARGE_FILE_STREAM_CANCEL' };
 
 export interface SaveDataPayload {
   /** Serialized text content the host should write to the document URI. */
