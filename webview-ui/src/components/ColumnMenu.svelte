@@ -127,7 +127,7 @@
   <div class="menu-divider"></div>
 
   <div class="menu-section">
-    <button class="menu-item" onclick={() => act(() => gridStore.setFilter({ colIndex, op: 'contains', value: '' }))}>
+    <button class="menu-item" onclick={() => act(() => gridStore.setFilter({ colIndex, op: 'is_not_null', value: '' }))}>
       <span class="menu-icon">⊟</span> Filter by this column
     </button>
     <button class="menu-item" onclick={() => act(() => gridStore.copyColumnToClipboard(colIndex))}>

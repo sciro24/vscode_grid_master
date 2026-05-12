@@ -7,15 +7,12 @@ import { uiStore } from '../stores/ui.svelte.js';
 
 type RawCsvMessage    = { type: '__RAW_CSV__';    payload: { text: string; totalBytes: number } };
 type DuckBundles = {
-  eh: { mainWorkerB64: string; mainModuleB64: string };
-  extensions: { parquetB64: string; jsonB64: string };
   parquetWasmB64?: string;
 };
 
 type RawBinaryMessage = { type: '__RAW_BINARY__'; payload: { base64?: string; base64Parts?: string[]; fileType: 'parquet' | 'arrow' | 'json' | 'excel' | 'avro'; jsonFormat?: 'json' | 'ndjson'; duckBundles: DuckBundles } };
-type RawRowsMessage   = { type: '__RAW_ROWS__';   payload: { schema: ColumnSchema[]; rows: CellValue[][]; duckBundles: DuckBundles } };
-type ExportPathMessage = { type: '__EXPORT_PATH__'; payload: { fsPath: string } };
-type AnyMessage = HostMessage | RawCsvMessage | RawBinaryMessage | RawRowsMessage | ExportPathMessage;
+type RawRowsMessage   = { type: '__RAW_ROWS__';   payload: { schema: ColumnSchema[]; rows: CellValue[][] } };
+type AnyMessage = HostMessage | RawCsvMessage | RawBinaryMessage | RawRowsMessage;
 
 export function setupMessageHandler(): () => void {
   const handler = (event: MessageEvent) => {
@@ -79,9 +76,6 @@ export function setupMessageHandler(): () => void {
         gridStore.receiveRawRows(msg.payload.schema, msg.payload.rows);
         break;
 
-      case '__EXPORT_PATH__':
-        gridStore.handleExportPath(msg.payload.fsPath);
-        break;
     }
   };
 
@@ -122,8 +116,9 @@ function parseCsvInline(text: string, _totalBytes: number): void {
     const headers = raw[0];
     const allRows: CellValue[][] = raw.slice(1).map(row => row.map(coerceCell));
     const schema = inferSchema(headers, allRows.slice(0, TYPE_INFERENCE_SAMPLE_ROWS));
+    const delimiter = result.meta.delimiter ?? ',';
 
-    gridStore.receiveCsvData(schema, allRows);
+    gridStore.receiveCsvData(schema, allRows, delimiter);
     uiStore.setLoading(false);
   } catch (err) {
     uiStore.setError(String(err));

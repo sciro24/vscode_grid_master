@@ -10,11 +10,9 @@ import { applyFilter, compareValues } from '@shared/filterUtils.js';
 
 let _parquetInited = false;
 
-// DuckDbBundleSet is still referenced by the host/store for type-compat but
+// Kept as DuckDbBundleSet for backward-compat with store wiring; only parquetWasmB64 is used.
 // the worker no longer uses DuckDB. Keep the type to avoid a bigger refactor.
 export type DuckDbBundleSet = {
-  eh: { mainWorkerB64: string; mainModuleB64: string };
-  extensions: { parquetB64: string; jsonB64: string };
   parquetWasmB64?: string;
 };
 
@@ -81,9 +79,7 @@ async function handleLoad(buffer: ArrayBuffer, fileType: 'parquet' | 'arrow' | '
         console.warn('[GM worker] init() failed, falling back to b64:', e);
         const b64 = bundles.parquetWasmB64;
         if (!b64) throw new Error('parquet-wasm bytes not provided');
-        const bin = atob(b64);
-        const bytes = new Uint8Array(bin.length);
-        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
         await init({ module_or_path: bytes });
       }
       _parquetInited = true;
@@ -224,9 +220,7 @@ async function handleLoadParts(buffers: ArrayBuffer[], fileType: 'parquet' | 'ar
       console.warn('[GM worker] init() failed, falling back to b64:', e);
       const b64 = bundles.parquetWasmB64;
       if (!b64) throw new Error('parquet-wasm bytes not provided');
-      const bin = atob(b64);
-      const bytes = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
       await init({ module_or_path: bytes });
     }
     _parquetInited = true;
@@ -354,7 +348,9 @@ function handleGetChunk(payload: {
   const hasSort = !!sort;
 
   // Fast path: lazy-mode Arrow table, no filter/sort/search → slice directly.
-  if (_arrowTable && !hasFilters && !hasSort && !hasSearch && _allRows.length === 0) {
+  // Restore the fast path even if _allRows was previously materialised.
+  if (_arrowTable && !hasFilters && !hasSort && !hasSearch) {
+    _allRows = [];
     const sliced = materialiseSlice(_arrowTable, _schema, startRow, endRow);
     const filteredTotal = _arrowTable.numRows;
     post({ type: 'CHUNK', payload: { requestId, rows: sliced, startRow, endRow: startRow + sliced.length, filteredTotal } });

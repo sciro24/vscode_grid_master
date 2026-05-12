@@ -50,7 +50,7 @@ function parseSidecar(raw: unknown): SidecarData | null {
     columnWidths: isNumberRecord(obj['columnWidths']) ? obj['columnWidths'] as Record<string, number> : {},
     hiddenColumns: Array.isArray(obj['hiddenColumns']) ? (obj['hiddenColumns'] as unknown[]).filter((v): v is string => typeof v === 'string') : [],
     pinnedColumns: isPinnedColumns(obj['pinnedColumns']) ? obj['pinnedColumns'] as SidecarData['pinnedColumns'] : { left: [], right: [] },
-    filters: Array.isArray(obj['filters']) ? obj['filters'] as SidecarData['filters'] : undefined,
+    filters: Array.isArray(obj['filters']) ? (obj['filters'] as unknown[]).filter(isFilterEntry) as SidecarData['filters'] : undefined,
     colorsActive: typeof obj['colorsActive'] === 'boolean' ? obj['colorsActive'] : undefined,
     sort: isSortEntry(obj['sort']) ? obj['sort'] as SidecarData['sort'] : null,
   };
@@ -68,6 +68,15 @@ function isPinnedColumns(v: unknown): v is { left: string[]; right: string[] } {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
   const o = v as Record<string, unknown>;
   return Array.isArray(o['left']) && Array.isArray(o['right']);
+}
+
+const VALID_FILTER_OPS = new Set(['eq','neq','contains','not_contains','gt','lt','gte','lte','regex','is_null','is_not_null']);
+
+function isFilterEntry(v: unknown): v is { column: string; op: string; value: string | number | null } {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
+  const o = v as Record<string, unknown>;
+  return typeof o['column'] === 'string' && VALID_FILTER_OPS.has(o['op'] as string) &&
+    (typeof o['value'] === 'string' || typeof o['value'] === 'number' || o['value'] === null);
 }
 
 function isSortEntry(v: unknown): v is { column: string; direction: 'asc' | 'desc' } | null {

@@ -80,6 +80,8 @@ class GridStore {
 
   // CSV-only: full dataset held in memory for inline filter/sort
   private _csvAllRows: CellValue[][] = [];
+  // Delimiter detected at parse time; preserved for save round-trip.
+  private _detectedDelimiter = ',';
 
   // Maps visible-row index (after filter/sort) → actual index in _csvAllRows.
   // Empty when there are no filters/sort/search active (identity mapping).
@@ -200,11 +202,12 @@ class GridStore {
   }
 
   // Called by inline CSV parser in messageHandler.ts
-  receiveCsvData(schema: ColumnSchema[], allRows: CellValue[][]): void {
+  receiveCsvData(schema: ColumnSchema[], allRows: CellValue[][], delimiter = ','): void {
     this.schema = schema;
     this.totalRows = allRows.length;
     this.filteredRows = allRows.length;
     this._csvAllRows = allRows;
+    this._detectedDelimiter = delimiter;
     this._computeAutoWidths(schema, allRows);
     this._applyPendingSidecar();
     this._storeChunk(0, allRows.slice(0, CHUNK_SIZE));
@@ -298,23 +301,19 @@ class GridStore {
 
   setCellValue(row: number, col: number, value: CellValue): void {
     const actualRow = this._actualRowIndex(row);
+    // Always read oldValue from the source-of-truth array, not the chunk cache
+    // (cache may be stale or invalidated when a filter is active).
+    let oldValue: CellValue = null;
+    if (this.fileType === 'csv' && this._csvAllRows[actualRow]) {
+      oldValue = this._csvAllRows[actualRow][col] ?? null;
+      this._csvAllRows[actualRow][col] = value;
+    }
+    // Also update the cache so the current render sees the change immediately.
     const chunkStart = Math.floor(row / CHUNK_SIZE) * CHUNK_SIZE;
     const chunk = this._cache.get(chunkStart);
-    let oldValue: CellValue = null;
     if (chunk) {
       const rowData = chunk[row - chunkStart];
-      if (rowData) {
-        oldValue = rowData[col] ?? null;
-        rowData[col] = value;
-      }
-    }
-    // Mirror into the master CSV array using the *actual* index so the change
-    // survives a re-chunk after filter/sort.
-    if (this.fileType === 'csv' && this._csvAllRows[actualRow]) {
-      if (oldValue === null && this._csvAllRows[actualRow][col] !== undefined) {
-        oldValue = this._csvAllRows[actualRow][col];
-      }
-      this._csvAllRows[actualRow][col] = value;
+      if (rowData) rowData[col] = value;
     }
     this._editHistory.push({ kind: 'CELL_EDIT', row: actualRow, col, oldValue, newValue: value });
     this.editCount = this._editHistory.length;
@@ -454,7 +453,7 @@ class GridStore {
         return typeof v === 'boolean' ? (v ? 'true' : 'false') : String(v);
       })
     );
-    const delimiter = (this.fileName.toLowerCase().endsWith('.tsv')) ? '\t' : ',';
+    const delimiter = this._detectedDelimiter;
     return Papa.unparse({ fields: headers, data: rows }, {
       delimiter,
       newline: '\n',
@@ -1034,8 +1033,6 @@ class GridStore {
     this._statsCache.set(payload.stats.colIndex, payload.stats);
   }
 
-  handleExportPath(_fsPath: string): void {}
-
   // ── Private ───────────────────────────────────────────────────────────────
 
   receiveRawRows(schema: ColumnSchema[], rows: CellValue[][]): void {
@@ -1134,6 +1131,7 @@ class GridStore {
   // index inside _csvAllRows. With no filter/sort/search this is identity.
   private _actualRowIndex(visibleRow: number): number {
     if (this._viewToActual.length === 0) return visibleRow;
+    if (visibleRow >= this._viewToActual.length) return this._csvAllRows.length - 1;
     return this._viewToActual[visibleRow] ?? visibleRow;
   }
 

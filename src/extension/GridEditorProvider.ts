@@ -9,15 +9,17 @@ import type { CellValue, ColumnSchema, InferredType } from '../shared/schema.js'
 export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentModel> {
   private static readonly _fileReader = new FileReaderService();
 
-  // Required by CustomEditorProvider — delegates to DocumentModel's own emitter
-  readonly onDidChangeCustomDocument = new vscode.EventEmitter<
+  private readonly _onDidChangeCustomDocument = new vscode.EventEmitter<
     vscode.CustomDocumentEditEvent<DocumentModel>
-  >().event;
+  >();
+  readonly onDidChangeCustomDocument = this._onDidChangeCustomDocument.event;
 
   static register(context: vscode.ExtensionContext, viewType: string): vscode.Disposable {
+    const provider = new GridEditorProvider(context);
+    context.subscriptions.push(provider._onDidChangeCustomDocument);
     return vscode.window.registerCustomEditorProvider(
       viewType,
-      new GridEditorProvider(context),
+      provider,
       {
         supportsMultipleEditorsPerDocument: false,
         webviewOptions: { retainContextWhenHidden: true },
@@ -235,11 +237,7 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
       };
       const parquetWasmB64 = await readDistB64('parquet_wasm_bg.wasm');
 
-      const duckBundles = {
-        eh: { mainWorkerB64: '', mainModuleB64: '' },
-        extensions: { parquetB64: '', jsonB64: '' },
-        parquetWasmB64,
-      };
+      const duckBundles = { parquetWasmB64 };
 
       if (document.fileType === 'orc') {
         await this._sendOrcData(document, panel, fileName, totalBytes, parquetWasmB64, duckWorkerUrl);
@@ -402,18 +400,15 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
 
   private async _saveDocument(
     document: DocumentModel,
-    _cancellation: vscode.CancellationToken,
+    cancellation: vscode.CancellationToken,
     destination?: vscode.Uri,
   ): Promise<void> {
     if (!document.isDirty && !destination) return;
+    if (cancellation.isCancellationRequested) return;
     if (document.fileType !== 'csv') {
-      // Save for binary/json formats is deferred. For now we just clear the
-      // patch list so the editor doesn't loop on dirty-state.
       document.clearPatches();
       return;
     }
-    // Patches are applied and serialized by the webview CSV worker.
-    // Full write-back implementation is Milestone 4.
     document.clearPatches();
   }
 
@@ -498,11 +493,7 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
       })
     );
 
-    const duckBundles = {
-      eh: { mainWorkerB64: '', mainModuleB64: '' },
-      extensions: { parquetB64: '', jsonB64: '' },
-      parquetWasmB64,
-    };
+    const duckBundles = { parquetWasmB64 };
 
     send({
       type: 'INIT',
@@ -606,11 +597,7 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
       })
     );
 
-    const duckBundles = {
-      eh: { mainWorkerB64: '', mainModuleB64: '' },
-      extensions: { parquetB64: '', jsonB64: '' },
-      parquetWasmB64,
-    };
+    const duckBundles = { parquetWasmB64 };
 
     send({
       type: 'INIT',
@@ -693,11 +680,7 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
         })
       );
 
-      const duckBundles = {
-        eh: { mainWorkerB64: '', mainModuleB64: '' },
-        extensions: { parquetB64: '', jsonB64: '' },
-        parquetWasmB64,
-      };
+      const duckBundles = { parquetWasmB64 };
 
       send({
         type: 'INIT',

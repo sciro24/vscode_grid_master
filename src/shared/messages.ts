@@ -80,7 +80,6 @@ export type WebviewMessage =
   | { type: 'UNDO' }
   | { type: 'REDO' }
   | { type: 'EXPORT';           payload: ExportPayload }
-  | { type: 'REQUEST_STATS';    payload: StatsRequestPayload }
   | { type: 'SAVE_SIDECAR';     payload: SaveSidecarPayload }
   | { type: 'UPDATE_DELIMITER'; payload: UpdateDelimiterPayload };
 
@@ -119,11 +118,6 @@ export interface ExportPayload {
   format: 'csv' | 'tsv' | 'json' | 'parquet';
   selection?: { rows: number[]; cols: number[] };
   includeHeaders: boolean;
-}
-
-export interface StatsRequestPayload {
-  requestId: string;
-  colIndex: number;
 }
 
 export interface SaveSidecarPayload {

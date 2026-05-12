@@ -18,9 +18,6 @@ export class DocumentModel {
   private readonly _onDidChange = new vscode.EventEmitter<vscode.CustomDocumentEditEvent<DocumentModel>>();
   readonly onDidChange = this._onDidChange.event;
 
-  private _undoStack: Array<Edit | BatchEdit> = [];
-  private _redoStack: Array<Edit | BatchEdit> = [];
-
   // In-memory patch layer: row→col→value overrides over the file on disk
   private _patches = new Map<number, Map<number, CellValue>>();
 
@@ -40,8 +37,6 @@ export class DocumentModel {
 
   applyEdit(edit: Edit): void {
     this._applyPatch(edit.row, edit.col, edit.newValue);
-    this._undoStack.push(edit);
-    this._redoStack = [];
     this._onDidChange.fire({
       document: this,
       undo: () => this._unapplyEdit(edit),
@@ -53,8 +48,6 @@ export class DocumentModel {
     for (const e of batch.edits) {
       this._applyPatch(e.row, e.col, e.newValue);
     }
-    this._undoStack.push(batch);
-    this._redoStack = [];
     this._onDidChange.fire({
       document: this,
       undo: () => {
@@ -84,8 +77,6 @@ export class DocumentModel {
 
   clearPatches(): void {
     this._patches.clear();
-    this._undoStack = [];
-    this._redoStack = [];
   }
 
   dispose(): void {
