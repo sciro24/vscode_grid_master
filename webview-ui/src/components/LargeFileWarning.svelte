@@ -32,11 +32,11 @@
       All features (sort, filter, statistics, editing) work normally once loaded.
     </p>
     <p class="warning-hint">
-      Or open a <strong>preview</strong> (first 100k rows) instantly — marked as Truncated.
+      Or open a <strong>preview</strong> (max 100k rows) instantly — marked as Truncated.
     </p>
     <div class="warning-actions">
       <button class="btn btn-secondary" onclick={cancel}>Cancel</button>
-      <button class="btn btn-outline" onclick={preview}>Preview (100k rows)</button>
+      <button class="btn btn-outline" onclick={preview}>Preview (Max 100k rows)</button>
       <button class="btn btn-primary" onclick={confirm}>Open full file</button>
     </div>
   </div>

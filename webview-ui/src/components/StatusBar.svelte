@@ -102,7 +102,7 @@
   <div class="status-right">
     {#if gridStore.rowCapWarning}
       {#if gridStore.rowCapWarning === 'preview'}
-        <span class="status-badge cap-badge" title="Preview mode — showing the first 100k rows">Preview</span>
+        <span class="status-badge cap-badge" title="Preview mode — showing the first 100k rows">Preview (Max 100k rows)</span>
       {:else if gridStore.rowCapWarning === 'memory'}
         <span class="status-badge cap-badge" title="Truncated due to memory limits">Truncated (memory)</span>
       {:else}

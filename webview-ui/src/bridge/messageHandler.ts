@@ -198,6 +198,11 @@ function handleCsvBatch(p: {
     _rafPending = false;
     _streamCapped = false;
     _streamingInProgress = true;
+    _lastMemoryCheck = 0;
+    _lastMemoryRatio = null;
+    _lastUsedHeap = 0;
+    _lastHeapDelta = 0;
+    _highMemStreak = 0;
     gridStore.setCsvStreaming(true);
     return;
   }

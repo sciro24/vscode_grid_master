@@ -10,19 +10,53 @@
   const HEADER_HEIGHT = 32;
   const OVERSCAN = 8;
   const MIN_COL_WIDTH = 40;
+  const MAX_SCROLLABLE_HEIGHT = 33_000_000;
 
   let scrollerEl: HTMLDivElement;
   let scrollTop = $state(0);
   let viewportHeight = $state(600);
+  let scrollHeight = $state(0);
 
   const totalRows = $derived(gridStore.filteredRows);
-  const totalHeight = $derived(totalRows * ROW_HEIGHT);
+  const realTotalHeight = $derived(totalRows * ROW_HEIGHT);
+  const virtualTotalHeight = $derived(Math.min(realTotalHeight, MAX_SCROLLABLE_HEIGHT));
+  const compressedScroll = $derived(realTotalHeight > MAX_SCROLLABLE_HEIGHT);
   // Read cacheVersion so cell reads in the template re-evaluate when the cache mutates.
   const cacheTick = $derived(gridStore.cacheVersion);
 
-  const rawStartRow = $derived(Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN));
-  const startRow = $derived(totalRows === 0 ? 0 : Math.min(rawStartRow, Math.max(0, totalRows - 1)));
   const visibleRowCount = $derived(Math.ceil(viewportHeight / ROW_HEIGHT) + OVERSCAN * 2);
+  const maxDataStart = $derived(Math.max(0, totalRows - visibleRowCount));
+  const maxScrollTop = $derived(Math.max(1, scrollHeight - viewportHeight));
+  const isNearBottom = $derived.by(() => maxScrollTop - scrollTop <= ROW_HEIGHT * (OVERSCAN + 2));
+  const isAtEnd = $derived.by(() => scrollTop + viewportHeight >= scrollHeight - 1);
+  const scrollRatio = $derived.by(() => {
+    if (!compressedScroll) return 0;
+    if (isAtEnd || isNearBottom) return 1;
+    return Math.min(1, Math.max(0, scrollTop / maxScrollTop));
+  });
+
+  const rawDisplayStartRow = $derived(Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN));
+  const displayStartRow = $derived.by(() => {
+    const maxDisplay = Math.max(0, Math.floor(Math.max(0, scrollHeight - HEADER_HEIGHT) / ROW_HEIGHT) - 1);
+    return Math.min(rawDisplayStartRow, maxDisplay);
+  });
+
+  const rawDataStartRow = $derived.by(() => {
+    if (!compressedScroll) {
+      return Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
+    }
+    if (isAtEnd || isNearBottom) return maxDataStart;
+    const base = Math.floor(scrollRatio * maxDataStart);
+    if (base >= maxDataStart - OVERSCAN) return maxDataStart;
+    const withOverscan = base - OVERSCAN;
+    return Math.max(0, Math.min(withOverscan, maxDataStart));
+  });
+  const startRow = $derived.by(() => {
+    if (totalRows === 0) return 0;
+    const clamped = Math.min(rawDataStartRow, maxDataStart);
+    if (clamped + visibleRowCount >= totalRows) return maxDataStart;
+    return clamped;
+  });
   const endRow = $derived(Math.min(totalRows, startRow + visibleRowCount));
   const rowCount = $derived(Math.max(0, endRow - startRow));
 
@@ -31,16 +65,22 @@
   });
 
   function onScroll(e: Event) {
-    scrollTop = (e.target as HTMLDivElement).scrollTop;
+    const el = e.target as HTMLDivElement;
+    scrollTop = el.scrollTop;
+    scrollHeight = el.scrollHeight;
   }
 
   function onResize() {
-    if (scrollerEl) viewportHeight = scrollerEl.clientHeight;
+    if (scrollerEl) {
+      viewportHeight = scrollerEl.clientHeight;
+      scrollHeight = scrollerEl.scrollHeight;
+    }
   }
 
   $effect(() => {
     if (scrollerEl) {
       viewportHeight = scrollerEl.clientHeight;
+      scrollHeight = scrollerEl.scrollHeight;
       const ro = new ResizeObserver(onResize);
       ro.observe(scrollerEl);
       return () => ro.disconnect();
@@ -412,7 +452,7 @@
 
 <div class="grid-root" class:is-resizing={resizing !== null} class:is-coloured={colouredMode}>
   <div class="grid-scroller" bind:this={scrollerEl} onscroll={onScroll}>
-    <div class="grid-sizer" style="height: {totalHeight + HEADER_HEIGHT}px;">
+    <div class="grid-sizer" style="height: {virtualTotalHeight + HEADER_HEIGHT}px;">
 
       <!-- Sticky header -->
       <div class="grid-header" style="height: {HEADER_HEIGHT}px;">
@@ -453,7 +493,7 @@
       </div>
 
       <!-- Virtualized rows -->
-      <div class="grid-rows" style="transform: translateY({HEADER_HEIGHT + startRow * ROW_HEIGHT}px);">
+      <div class="grid-rows" style="transform: translateY({HEADER_HEIGHT + displayStartRow * ROW_HEIGHT}px);">
         {#each Array(rowCount) as _, i}
           {@const row = startRow + i}
           {@const rowSel = isRowSelected(row)}
