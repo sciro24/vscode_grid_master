@@ -505,10 +505,12 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
     // small (~50 MB JSON at 100k rows × moderate column count).
     const TYPE_SAMPLE_ROWS = 1000;
     const BATCH_ROWS = 100_000;
+    const MAX_WARNINGS = 50;
     const sampleRows: CellValue[][] = [];
     let headers: string[] | null = null;
     let detectedDelimiter = ',';
     let parseError: string | null = null;
+    let parseWarnings: Array<{ row: number; line?: number; message: string }> = [];
     let pendingBatch: CellValue[][] = [];
     let schemaSent = false;
     let totalRowsSent = 0;
@@ -544,7 +546,14 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
       if (final) {
         panel.webview.postMessage({
           type: '__RAW_CSV_BATCH__',
-          payload: { rows: [], done: true, kind: 'done', totalRows: totalRowsSent, previewOnly: rowLimit !== undefined },
+          payload: {
+            rows: [],
+            done: true,
+            kind: 'done',
+            totalRows: totalRowsSent,
+            previewOnly: rowLimit !== undefined,
+            parseWarnings: parseWarnings.length > 0 ? parseWarnings : undefined,
+          },
         });
       }
     };
@@ -564,6 +573,16 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
           if (cancelled) { parser.abort(); return; }
           if (results.meta?.delimiter) detectedDelimiter = results.meta.delimiter;
           if (typeof results.meta?.cursor === 'number') lastCursor = results.meta.cursor;
+          if (results.errors && results.errors.length > 0 && parseWarnings.length < MAX_WARNINGS) {
+            for (const e of results.errors) {
+              if (parseWarnings.length >= MAX_WARNINGS) break;
+              parseWarnings.push({
+                row: totalRowsSent + rowsAccepted,
+                line: typeof e.row === 'number' ? e.row : undefined,
+                message: e.message,
+              });
+            }
+          }
           const row = results.data as unknown as string[];
           if (!Array.isArray(row)) return;
           if (!headers) {

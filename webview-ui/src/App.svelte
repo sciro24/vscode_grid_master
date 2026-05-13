@@ -38,6 +38,13 @@
     <NoticeBanner message="Truncated due to memory limits. The grid stopped loading additional rows to keep the session stable." />
   {/if}
 
+  {#if uiStore.parseWarnings !== null}
+    <NoticeBanner
+      message="{uiStore.parseWarnings.length} parse warning{uiStore.parseWarnings.length === 1 ? '' : 's'} — rows may have missing fields. First: {uiStore.parseWarnings[0]?.message ?? ''}"
+      onDismiss={() => uiStore.setParseWarnings(null)}
+    />
+  {/if}
+
   <Toolbar />
 
   {#if hasFilters}

@@ -9,6 +9,8 @@ class UiStore {
   isDirty = $state(false);
   largeFileWarning = $state<{ fileSizeMb: number } | null>(null);
   streamProgress = $state<number | undefined>(undefined);
+  filterProgress = $state<number | null>(null);
+  parseWarnings = $state<Array<{ row: number; line?: number; message: string }> | null>(null);
 
   setLoading(active: boolean, message?: string, progress?: number): void {
     this.loading = active;
@@ -18,6 +20,14 @@ class UiStore {
       this.error = null;
       this.streamProgress = undefined;
     }
+  }
+
+  setFilterProgress(pct: number | null): void {
+    this.filterProgress = pct;
+  }
+
+  setParseWarnings(warnings: Array<{ row: number; line?: number; message: string }> | null): void {
+    this.parseWarnings = warnings;
   }
 
   setLargeFileWarning(info: { fileSizeMb: number } | null): void {

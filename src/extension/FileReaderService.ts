@@ -17,6 +17,9 @@ export class FileReaderService {
 
   async readSidecar(uri: vscode.Uri): Promise<SidecarData | null> {
     const sidecarUri = this._sidecarUri(uri);
+    const tmpUri = vscode.Uri.file(sidecarUri.fsPath + '.tmp');
+    // Clean up any stale .tmp left by a crashed write.
+    try { await vscode.workspace.fs.delete(tmpUri); } catch { /* ENOENT is fine */ }
     try {
       const raw = await vscode.workspace.fs.readFile(sidecarUri);
       const parsed: unknown = JSON.parse(new TextDecoder().decode(raw));
@@ -28,8 +31,17 @@ export class FileReaderService {
 
   async writeSidecar(uri: vscode.Uri, sidecar: SidecarData): Promise<void> {
     const sidecarUri = this._sidecarUri(uri);
+    const tmpUri = vscode.Uri.file(sidecarUri.fsPath + '.tmp');
     const data = new TextEncoder().encode(JSON.stringify(sidecar, null, 2));
-    await vscode.workspace.fs.writeFile(sidecarUri, data);
+    try {
+      await vscode.workspace.fs.writeFile(tmpUri, data);
+      await vscode.workspace.fs.rename(tmpUri, sidecarUri, { overwrite: true });
+    } catch (e) {
+      console.error('[GridMaster] writeSidecar failed:', e);
+      // Attempt cleanup of partial .tmp so next startup won't delete a stale file.
+      try { await vscode.workspace.fs.delete(tmpUri); } catch { /* ignore */ }
+      throw e;
+    }
   }
 
   private _sidecarUri(uri: vscode.Uri): vscode.Uri {

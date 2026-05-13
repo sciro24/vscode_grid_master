@@ -100,6 +100,9 @@
   </div>
 
   <div class="status-right">
+    {#if uiStore.filterProgress !== null}
+      <span class="status-badge filter-progress-badge">Filtering… {uiStore.filterProgress}%</span>
+    {/if}
     {#if gridStore.rowCapWarning}
       {#if gridStore.rowCapWarning === 'preview'}
         <span class="status-badge cap-badge" title="Preview mode — showing the first 100k rows">Preview (Max 100k rows)</span>
@@ -197,5 +200,10 @@
   .cap-badge {
     background: rgba(204, 167, 0, 0.15);
     color: var(--vscode-editorWarning-foreground, #cca700);
+  }
+
+  .filter-progress-badge {
+    background: var(--gm-accent-light);
+    color: var(--gm-accent);
   }
 </style>

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { gridStore } from '../stores/grid.svelte.js';
   import type { FilterSpec, FilterOp } from '@shared/schema.js';
+  import { validateRegexFilter } from '@shared/filterUtils.js';
 
   const OP_LABELS: Record<FilterOp, string> = {
     contains: 'contains',
@@ -36,6 +37,11 @@
     gridStore.setFilter({ ...f, value });
   }
 
+  function regexError(f: FilterSpec): string | null {
+    if (f.op !== 'regex') return null;
+    return validateRegexFilter(String(f.value ?? ''));
+  }
+
   const filters = $derived(gridStore.filters);
   const schema = $derived(gridStore.schema);
 </script>
@@ -56,10 +62,13 @@
         {/each}
       </select>
       {#if needsValue(f.op)}
+        {@const err = regexError(f)}
         <input
           class="chip-val"
+          class:chip-val-error={err !== null}
           type="text"
           value={String(f.value ?? '')}
+          title={err ?? undefined}
           oninput={(e) => updateFilterValue(f, (e.target as HTMLInputElement).value)}
         />
       {/if}
@@ -131,6 +140,11 @@
     width: 100px;
     outline: none;
     border-right: 1px solid var(--gm-border);
+  }
+
+  .chip-val-error {
+    color: var(--vscode-editorError-foreground, #f44747);
+    text-decoration: underline wavy var(--vscode-editorError-foreground, #f44747);
   }
 
   .chip-remove {

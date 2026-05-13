@@ -136,3 +136,9 @@ export interface SaveSidecarPayload {
 export interface UpdateDelimiterPayload {
   delimiter: string;
 }
+
+export interface ParseWarning {
+  row: number;
+  line?: number;
+  message: string;
+}

@@ -14,6 +14,7 @@ type RawCsvBatchMessage = { type: '__RAW_CSV_BATCH__'; payload: {
   kind: 'init' | 'rows' | 'done';
   totalRows?: number;
   bytesRead?: number;
+  parseWarnings?: Array<{ row: number; line?: number; message: string }>;
 } };
 type DuckBundles = {
   parquetWasmB64?: string;
@@ -189,6 +190,7 @@ function handleCsvBatch(p: {
   totalRows?: number;
   bytesRead?: number;
   previewOnly?: boolean;
+  parseWarnings?: Array<{ row: number; line?: number; message: string }>;
 }): void {
   if (p.kind === 'init') {
     _csvStreamSchema = p.schema ?? [];
@@ -251,6 +253,7 @@ function handleCsvBatch(p: {
   // blocked by a synchronous flush of potentially millions of pending rows.
   const totalRows = p.totalRows ?? gridStore.totalRows;
   const previewOnly = !!p.previewOnly;
+  const parseWarnings = p.parseWarnings ?? null;
 
   const _finalize = (): void => {
     if (_rafPending || _pendingAppendRows.length > 0) {
@@ -261,6 +264,7 @@ function handleCsvBatch(p: {
     gridStore.finalizeCsvRows(totalRows);
     gridStore.setCsvStreaming(false);
     if (previewOnly) gridStore.setRowCapWarning('preview');
+    if (parseWarnings && parseWarnings.length > 0) uiStore.setParseWarnings(parseWarnings);
     _streamingInProgress = false;
     uiStore.setStreamProgress(100);
     // Small delay so the "100%" flash is visible before overlay hides

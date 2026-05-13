@@ -74,9 +74,13 @@ class GridStore {
   // Grid data
   private _cache: ChunkCache = new Map();
   private _accessOrder: number[] = [];
-  // Chunks currently being built by _serveCsvChunk or pending worker response.
-  // Prevents re-entering the same chunk request on every render frame.
-  private _pendingChunks = new Set<number>();
+  // Chunks pending worker response: requestId → startRow.
+  // Keyed by requestId so a retry for the same startRow doesn't collide.
+  private _pendingChunks = new Map<string, number>();
+  // Timeout handles per requestId — cleared on receipt or ERROR.
+  private _pendingChunkTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  // Retry counter per requestId — max 1 retry to avoid infinite loops.
+  private _chunkRetryCount = new Map<string, number>();
 
   // Reactive counter — bumped on any cache mutation so derived UI re-renders.
   // Plain Maps aren't reactive in Svelte 5, this is the cheapest fix.
@@ -321,7 +325,7 @@ class GridStore {
     });
     if (fingerprint === this._viewFingerprint) return;
 
-    if (this._csvAllRows.length > 200_000) {
+    if (this._csvAllRows.length > 50_000) {
       if (!this._viewBuilding) this._rebuildViewAsync(fingerprint);
       return;
     }
@@ -1158,7 +1162,7 @@ class GridStore {
 
   receiveChunk(payload: ChunkPayload): void {
     const { requestId, chunk, filteredTotal } = payload;
-    this._storeChunk(chunk.startRow, chunk.rows);
+    this._storeChunk(chunk.startRow, chunk.rows, requestId);
     if (filteredTotal !== undefined) this.filteredRows = filteredTotal;
 
     const resolve = this._pendingRequests.get(requestId);
@@ -1193,16 +1197,17 @@ class GridStore {
     uiStore.setLoading(false);
   }
 
-  private _requestChunk(startRow: number, endRow: number): void {
+  private _requestChunk(startRow: number, endRow: number, retryRequestId?: string): void {
     if (this._isInMemoryTable()) return;
-    // Skip if this chunk is already being built — prevents per-frame re-entry
-    // during streaming when rows aren't available yet.
-    if (this._pendingChunks.has(startRow)) return;
-    this._pendingChunks.add(startRow);
+    // Skip if a pending request already covers this startRow (prevents per-frame re-entry).
+    const alreadyPending = [...this._pendingChunks.values()].includes(startRow);
+    if (alreadyPending && !retryRequestId) return;
+
+    const requestId = retryRequestId ?? `chunk-${startRow}-${Date.now()}`;
+    this._pendingChunks.set(requestId, startRow);
 
     // Worker may still be initialising — queue via the ready promise.
     this._getOrCreateWorker().then(worker => {
-      const requestId = `chunk-${startRow}-${Date.now()}`;
       const effectiveEndRow = Math.min(endRow, this.totalRows > 0 ? this.totalRows : endRow);
       // Svelte 5 $state values are Proxy objects — structured-clone (used by
       // postMessage) cannot handle them. Serialize to plain JS via JSON round-trip.
@@ -1222,13 +1227,34 @@ class GridStore {
         },
       };
       worker.postMessage(msg);
-    }).catch(e => uiStore.setError(String(e)));
+
+      const timer = setTimeout(() => {
+        this._pendingChunks.delete(requestId);
+        this._pendingChunkTimers.delete(requestId);
+        const retries = this._chunkRetryCount.get(requestId) ?? 0;
+        this._chunkRetryCount.delete(requestId);
+        if (retries === 0) {
+          // One retry with a fresh requestId derived from the original.
+          const retryId = `${requestId}-retry`;
+          this._chunkRetryCount.set(retryId, 1);
+          this._requestChunk(startRow, endRow, retryId);
+        } else {
+          uiStore.setError(`Chunk request timed out (startRow=${startRow})`);
+        }
+      }, 15_000);
+      this._pendingChunkTimers.set(requestId, timer);
+    }).catch(e => {
+      this._pendingChunks.delete(requestId);
+      this._pendingChunkTimers.delete(requestId);
+      this._chunkRetryCount.delete(requestId);
+      uiStore.setError(String(e));
+    });
   }
 
   private async _rebuildViewAsync(fingerprint: string): Promise<void> {
     this._viewBuilding = true;
     this._viewFingerprint = fingerprint; // Lock to prevent concurrent rebuilds
-    uiStore.setLoading(true, 'Sorting…');
+    uiStore.setFilterProgress(0);
 
     await new Promise<void>(r => setTimeout(r, 0));
 
@@ -1239,8 +1265,9 @@ class GridStore {
     const hasSearch = q.length > 0;
     const hasSort = !!sort;
     const n = this._csvAllRows.length;
+    const CHUNK = 50_000;
 
-    // Filter pass — index-only, no object allocation
+    // Filter pass — index-only, chunked with progress
     let filtered: number[];
     if (hasFilter || hasSearch) {
       filtered = [];
@@ -1249,6 +1276,10 @@ class GridStore {
         if (hasFilter && !filters.every(f => applyFilter(row, f))) continue;
         if (hasSearch && !row.some(cell => String(cell ?? '').toLowerCase().includes(q))) continue;
         filtered.push(i);
+        if ((i + 1) % CHUNK === 0) {
+          uiStore.setFilterProgress(Math.round(((i + 1) / n) * (hasSort ? 80 : 100)));
+          await new Promise<void>(r => setTimeout(r, 0));
+        }
       }
     } else {
       filtered = Array.from({ length: n }, (_, i) => i);
@@ -1266,13 +1297,14 @@ class GridStore {
     if (currentFp !== fingerprint) {
       this._viewFingerprint = '';
       this._viewBuilding = false;
-      uiStore.setLoading(false);
+      uiStore.setFilterProgress(null);
       this.cacheVersion++; // Nudge DataGrid to retry _serveCsvChunk with new fingerprint
       return;
     }
 
     // Sort pass — in-place on index array, no extra allocations
     if (hasSort) {
+      uiStore.setFilterProgress(85);
       const { colIndex, direction } = sort!;
       const rows = this._csvAllRows;
       filtered.sort((a, b) => compareValues(rows[a][colIndex], rows[b][colIndex], direction));
@@ -1284,7 +1316,7 @@ class GridStore {
     this.filteredRows = filtered.length;
     this._viewBuilding = false;
     this.cacheVersion++;
-    uiStore.setLoading(false);
+    uiStore.setFilterProgress(null);
   }
 
   // Translate a visible row index (the one DataGrid renders) into the actual
@@ -1293,8 +1325,27 @@ class GridStore {
     return mapVisibleRow(visibleRow, this._viewToActual, this._csvAllRows.length);
   }
 
-  private _storeChunk(startRow: number, rows: CellValue[][]): void {
-    this._pendingChunks.delete(startRow);
+  private _storeChunk(startRow: number, rows: CellValue[][], requestId?: string): void {
+    if (requestId) {
+      this._pendingChunks.delete(requestId);
+      const timer = this._pendingChunkTimers.get(requestId);
+      if (timer !== undefined) {
+        clearTimeout(timer);
+        this._pendingChunkTimers.delete(requestId);
+      }
+      this._chunkRetryCount.delete(requestId);
+    } else {
+      // Fallback: remove any pending entry whose startRow matches.
+      for (const [rid, row] of this._pendingChunks) {
+        if (row === startRow) {
+          this._pendingChunks.delete(rid);
+          const t = this._pendingChunkTimers.get(rid);
+          if (t !== undefined) { clearTimeout(t); this._pendingChunkTimers.delete(rid); }
+          this._chunkRetryCount.delete(rid);
+          break;
+        }
+      }
+    }
     this._cache.set(startRow, rows);
     this._accessOrder = [...this._accessOrder.filter(k => k !== startRow), startRow];
 
@@ -1332,7 +1383,7 @@ class GridStore {
 
       case 'CHUNK': {
         const { requestId, rows, startRow, filteredTotal } = msg.payload;
-        this._storeChunk(startRow, rows);
+        this._storeChunk(startRow, rows, requestId);
         this.filteredRows = filteredTotal;
         const resolve = this._pendingRequests.get(requestId);
         if (resolve) {
@@ -1342,9 +1393,17 @@ class GridStore {
         break;
       }
 
-      case 'ERROR':
+      case 'ERROR': {
+        // Clear all in-flight chunk requests so they don't leak.
+        for (const [rid] of this._pendingChunks) {
+          const t = this._pendingChunkTimers.get(rid);
+          if (t !== undefined) { clearTimeout(t); this._pendingChunkTimers.delete(rid); }
+          this._chunkRetryCount.delete(rid);
+        }
+        this._pendingChunks.clear();
         uiStore.setError(msg.payload.message);
         break;
+      }
     }
   }
 
