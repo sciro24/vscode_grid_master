@@ -17,13 +17,13 @@ export type DuckDbBundleSet = {
 };
 
 export type DuckDbWorkerIn =
-  | { type: 'LOAD'; payload: { buffer: ArrayBuffer; fileType: 'parquet' | 'arrow' | 'json' | 'excel' | 'avro'; jsonFormat?: 'json' | 'ndjson'; bundles: DuckDbBundleSet } }
+  | { type: 'LOAD'; payload: { buffer: ArrayBuffer; fileType: 'parquet' | 'arrow' | 'json' | 'excel' | 'avro'; jsonFormat?: 'json' | 'ndjson'; bundles: DuckDbBundleSet; sheetName?: string } }
   | { type: 'LOAD_PARTS'; payload: { buffers: ArrayBuffer[]; fileType: 'parquet' | 'arrow'; bundles: DuckDbBundleSet } }
   | { type: 'GET_CHUNK'; payload: { requestId: string; startRow: number; endRow: number; filters?: FilterSpec[]; sort?: SortSpec; globalSearch?: string } }
   | { type: 'QUERY'; payload: { requestId: string; sql: string } };
 
 export type DuckDbWorkerOut =
-  | { type: 'READY'; payload: { schema: ColumnSchema[]; totalRows: number } }
+  | { type: 'READY'; payload: { schema: ColumnSchema[]; totalRows: number; availableSheets?: string[]; selectedSheet?: string } }
   | { type: 'CHUNK'; payload: { requestId: string; rows: CellValue[][]; startRow: number; endRow: number; filteredTotal: number } }
   | { type: 'QUERY_RESULT'; payload: { requestId: string; rows: CellValue[][]; columns: string[] } }
   | { type: 'ERROR'; payload: { message: string } };
@@ -48,7 +48,7 @@ self.onmessage = async (e: MessageEvent<DuckDbWorkerIn>) => {
   console.log('[GM worker] received message', msg.type);
   try {
     switch (msg.type) {
-      case 'LOAD':       await handleLoad(msg.payload.buffer, msg.payload.fileType, msg.payload.bundles, msg.payload.jsonFormat); break;
+      case 'LOAD':       await handleLoad(msg.payload.buffer, msg.payload.fileType, msg.payload.bundles, msg.payload.jsonFormat, msg.payload.sheetName); break;
       case 'LOAD_PARTS': await handleLoadParts(msg.payload.buffers, msg.payload.fileType, msg.payload.bundles); break;
       case 'GET_CHUNK':  handleGetChunk(msg.payload); break;
       case 'QUERY':      break; // not implemented in this backend
@@ -61,7 +61,7 @@ self.onmessage = async (e: MessageEvent<DuckDbWorkerIn>) => {
 
 // ── Load ──────────────────────────────────────────────────────────────────────
 
-async function handleLoad(buffer: ArrayBuffer, fileType: 'parquet' | 'arrow' | 'json' | 'excel' | 'avro', bundles: DuckDbBundleSet, jsonFormat: 'json' | 'ndjson' = 'json'): Promise<void> {
+async function handleLoad(buffer: ArrayBuffer, fileType: 'parquet' | 'arrow' | 'json' | 'excel' | 'avro', bundles: DuckDbBundleSet, jsonFormat: 'json' | 'ndjson' = 'json', sheetName?: string): Promise<void> {
   console.log('[GM worker] handleLoad', fileType, buffer.byteLength, 'bytes');
 
   let table: arrow.Table | null = null;
@@ -102,12 +102,12 @@ async function handleLoad(buffer: ArrayBuffer, fileType: 'parquet' | 'arrow' | '
     }
   } else if (fileType === 'excel') {
     const wb = XLSX.read(new Uint8Array(buffer), { type: 'array', dense: true });
-    const sheetName = wb.SheetNames[0];
-    const ws = wb.Sheets[sheetName];
+    const usedSheet = (sheetName && wb.SheetNames.includes(sheetName)) ? sheetName : wb.SheetNames[0];
+    const ws = wb.Sheets[usedSheet];
     // header:1 → array-of-arrays; defval ensures missing cells are null
     const aoa: unknown[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: true }) as unknown[][];
     if (aoa.length === 0) {
-      post({ type: 'READY', payload: { schema: [], totalRows: 0 } });
+      post({ type: 'READY', payload: { schema: [], totalRows: 0, availableSheets: wb.SheetNames, selectedSheet: usedSheet } });
       return;
     }
     const headers = (aoa[0] as unknown[]).map((h, i) => (h != null ? String(h) : `col_${i}`));
@@ -121,7 +121,7 @@ async function handleLoad(buffer: ArrayBuffer, fileType: 'parquet' | 'arrow' | '
     _allRows = dataRows.map(row =>
       headers.map((_, ci) => coerceJsonValue((row as unknown[])[ci]))
     );
-    post({ type: 'READY', payload: { schema: _schema, totalRows: _allRows.length } });
+    post({ type: 'READY', payload: { schema: _schema, totalRows: _allRows.length, availableSheets: wb.SheetNames, selectedSheet: usedSheet } });
     return;
   } else {
     // JSON / NDJSON — parse directly; skip arrow.tableFromJSON which uses

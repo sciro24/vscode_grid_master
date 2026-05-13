@@ -56,6 +56,8 @@ export interface SidecarData {
   columnOrder?: number[];
   /** Schema indices of individually frozen columns. Absent = none frozen. */
   frozenCols?: number[];
+  /** Last selected sheet name for Excel files. Absent = first sheet. */
+  selectedSheet?: string;
 }
 
 export interface Bookmark {

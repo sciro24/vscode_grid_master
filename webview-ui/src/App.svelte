@@ -12,6 +12,7 @@
   import LargeFileWarning from './components/LargeFileWarning.svelte';
   import ErrorBanner from './components/ErrorBanner.svelte';
   import NoticeBanner from './components/NoticeBanner.svelte';
+  import SheetTabs from './components/SheetTabs.svelte';
 
   let teardown: (() => void) | null = null;
 
@@ -27,6 +28,7 @@
   const hasData = $derived(gridStore.schema.length > 0);
   const hasFilters = $derived(gridStore.filters.length > 0);
   const memoryTruncated = $derived(gridStore.rowCapWarning === 'memory');
+  const hasSheets = $derived(gridStore.availableSheets.length > 1);
 </script>
 
 <div class="app-shell">
@@ -49,6 +51,10 @@
 
   {#if hasFilters}
     <FilterBar />
+  {/if}
+
+  {#if hasSheets}
+    <SheetTabs />
   {/if}
 
   <div class="grid-area">

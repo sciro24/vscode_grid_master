@@ -136,9 +136,17 @@ class GridStore {
   // Visual column order: array of schema indices. null = natural (schema) order.
   columnOrder = $state<number[] | null>(null);
 
+  // Excel multi-sheet
+  availableSheets = $state<string[]>([]);
+  selectedSheet = $state<string>('');
+
   // Workers (DuckDB only — CSV is parsed inline in the main thread)
   private _duckWorker: Worker | null = null;
   private _pendingRequests = new Map<string, (rows: CellValue[][]) => void>();
+
+  // Excel: keep a copy of the buffer so selectSheet() can re-load a different sheet.
+  private _excelBuffer: ArrayBuffer | null = null;
+  private _lastDuckBundles: import('../workers/duckdb.worker.js').DuckDbBundleSet | null = null;
 
   // Column colors: colIndex → CSS color string
   colColors = $state<Map<number, string>>(new Map());
@@ -339,16 +347,34 @@ class GridStore {
 
   loadRawBinary(
     buffer: ArrayBuffer,
-    fileType: 'parquet' | 'arrow' | 'json',
+    fileType: 'parquet' | 'arrow' | 'json' | 'excel' | 'avro',
     duckBundles: import('../workers/duckdb.worker.js').DuckDbBundleSet,
     jsonFormat?: 'json' | 'ndjson',
   ): void {
     this.fileType = fileType;
+    if (fileType === 'excel') {
+      this._excelBuffer = buffer.slice(0);
+      this._lastDuckBundles = duckBundles;
+    }
+    const initialSheet = fileType === 'excel' ? (this.sidecar?.selectedSheet ?? undefined) : undefined;
     console.log('[GM] loadRawBinary', fileType, 'bundles=', duckBundles);
     this._getOrCreateWorker().then(worker => {
       console.log('[GM] sending LOAD to worker');
-      const msg: DuckDbWorkerIn = { type: 'LOAD', payload: { buffer, fileType, jsonFormat, bundles: duckBundles } };
+      const msg: DuckDbWorkerIn = { type: 'LOAD', payload: { buffer, fileType: fileType as 'parquet' | 'arrow' | 'json' | 'excel' | 'avro', jsonFormat, bundles: duckBundles, sheetName: initialSheet } };
       worker.postMessage(msg, [buffer]);
+    }).catch(e => uiStore.setError(String(e)));
+  }
+
+  selectSheet(name: string): void {
+    if (name === this.selectedSheet || !this._excelBuffer) return;
+    this.selectedSheet = name;
+    this.persistSidecar();
+    uiStore.setLoading(true);
+    const copy = this._excelBuffer.slice(0);
+    const bundles = this._lastDuckBundles ?? {};
+    this._getOrCreateWorker().then(worker => {
+      const msg: DuckDbWorkerIn = { type: 'LOAD', payload: { buffer: copy, fileType: 'excel', bundles, sheetName: name } };
+      worker.postMessage(msg, [copy]);
     }).catch(e => uiStore.setError(String(e)));
   }
 
@@ -1376,6 +1402,10 @@ class GridStore {
         this.schema = msg.payload.schema;
         this.totalRows = msg.payload.totalRows;
         this.filteredRows = msg.payload.totalRows;
+        if (msg.payload.availableSheets) {
+          this.availableSheets = msg.payload.availableSheets;
+          this.selectedSheet = msg.payload.selectedSheet ?? msg.payload.availableSheets[0] ?? '';
+        }
         this._applyPendingSidecar();
         this._requestChunk(0, CHUNK_SIZE);
         uiStore.setLoading(false);
@@ -1505,6 +1535,7 @@ class GridStore {
       sort: sortName ? { column: sortName, direction: this.sort!.direction } : null,
       columnOrder: this.columnOrder ?? undefined,
       frozenCols: this.frozenCols.size > 0 ? [...this.frozenCols] : undefined,
+      selectedSheet: this.selectedSheet || undefined,
     };
   }
 
