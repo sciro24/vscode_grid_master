@@ -466,6 +466,8 @@
             class:header-cell-selected={colSel}
             class:col-frozen={isFrozen}
             class:drag-over={dragOverPos === colPos && dragFromPos !== colPos}
+            role="columnheader"
+            tabindex="-1"
             draggable="true"
             ondragstart={(e) => onHeaderDragStart(e, colPos)}
             ondragover={(e) => onHeaderDragOver(e, colPos)}
@@ -487,6 +489,7 @@
               class="resize-handle"
               onmousedown={(e) => startResize(e, col.name, col.inferredType)}
               role="separator"
+              tabindex="-1"
               aria-label="Resize column"
             ></div>
           </div>
@@ -503,6 +506,7 @@
               class="row-num-cell row-num-frozen"
               class:row-num-selected={rowSel}
               onclick={() => onRowNumClick(row)}
+              onkeydown={(e) => { if (e.key === 'Enter') onRowNumClick(row); }}
               oncontextmenu={(e) => onRowContextMenu(e, row)}
               title="Click to select row — right-click for options"
               role="button"
@@ -512,6 +516,7 @@
               {@const val = (cacheTick, gridStore.getCell(row, col.index))}
               {@const isFrozen = frozenCols.has(col.index)}
               {#if editingCell && editingCell.row === row && editingCell.col === col.index}
+                <!-- svelte-ignore a11y_autofocus -->
                 <input
                   class="cell-input"
                   style="width: {colWidth(col.name, col.inferredType)}px"
@@ -533,6 +538,7 @@
                   style="width: {colWidth(col.name, col.inferredType)}px; {colBgStyle(col.index)}{isFrozen ? ' left: ' + getFrozenLeft(col, colPos) + 'px;' : ''}"
                   onclick={(e) => onCellClick(e, row, col.index)}
                   ondblclick={() => startEdit(row, col.index)}
+                  onkeydown={(e) => { if (e.key === 'Enter') startEdit(row, col.index); }}
                   role="button"
                   tabindex="-1"
                 >

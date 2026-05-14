@@ -552,7 +552,7 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
     let headers: string[] | null = null;
     let detectedDelimiter = ',';
     let parseError: string | null = null;
-    let parseWarnings: Array<{ row: number; line?: number; message: string }> = [];
+    const parseWarnings: Array<{ row: number; line?: number; message: string }> = [];
     let pendingBatch: CellValue[][] = [];
     let schemaSent = false;
     let totalRowsSent = 0;
@@ -684,7 +684,7 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
     // sql.js is a WASM-based SQLite that runs in Node — no native bindings needed.
     // The WASM file is copied to dist/ at build time so it's available in the
     // installed extension (node_modules is excluded from the .vsix).
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
     const initSqlJs = require('sql.js') as typeof import('sql.js');
     const wasmUri = vscode.Uri.joinPath(this._context.extensionUri, 'dist', 'sql-wasm.wasm');
     const wasmPath = wasmUri.fsPath;
@@ -916,7 +916,7 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
     const send = (m: HostMessage) => panel.webview.postMessage(m);
 
     // avsc requires a file path, so write bytes to a temp file and clean up after.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
     const avsc = require('avsc') as typeof import('avsc');
     const os = await import('os');
     const fs = await import('fs');
@@ -1125,6 +1125,7 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
   }
 
   private _nonce(): string {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
     return require('crypto').randomBytes(16).toString('base64url') as string;
   }
 
@@ -1162,7 +1163,7 @@ function coerceCell(raw: string): CellValue {
 }
 
 function isDateLike(s: string): boolean {
-  return /^\d{4}-\d{2}-\d{2}/.test(s) || /^\d{2}[\/\-]\d{2}[\/\-]\d{4}/.test(s);
+  return /^\d{4}-\d{2}-\d{2}/.test(s) || new RegExp('^\\\\d{2}[/-]\\\\d{2}[/-]\\\\d{4}').test(s);
 }
 
 function inferTypeFromSamples(samples: CellValue[]): InferredType {

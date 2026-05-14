@@ -45,8 +45,8 @@ export function applyFilter(row: CellValue[], f: FilterSpec): boolean {
       }
       try { return new RegExp(pattern, 'i').test(String(cell ?? '')); } catch { return false; }
     }
-    case 'is_null':      return cell === null;
-    case 'is_not_null':  return cell !== null;
+    case 'is_null':      return cell == null;
+    case 'is_not_null':  return cell != null;
     default:             return true;
   }
 }
