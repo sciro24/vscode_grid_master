@@ -519,6 +519,7 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
     if (!document.isDirty && !destination) return;
     if (cancellation.isCancellationRequested) return;
     if (document.fileType !== 'csv') {
+      vscode.window.showWarningMessage('Saving edits is only supported for CSV files. Your changes will not be written to disk.');
       document.clearPatches();
       return;
     }

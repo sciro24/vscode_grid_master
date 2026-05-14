@@ -116,46 +116,4 @@
     opacity: 0.3;
   }
 
-  .stream-progress-bar {
-    height: 3px;
-    background: var(--gm-border);
-    flex-shrink: 0;
-    overflow: hidden;
-  }
-
-  .stream-progress-fill {
-    height: 100%;
-    background: var(--gm-success);
-    transition: width 0.3s ease;
-  }
-
-  .stream-progress-toast {
-    position: absolute;
-    bottom: 32px;
-    right: 12px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 12px;
-    background: var(--gm-toolbar-bg, var(--vscode-editorWidget-background));
-    border: 1px solid var(--gm-border, var(--vscode-panel-border));
-    border-radius: 4px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
-    font-size: 11px;
-    color: var(--gm-fg-muted);
-    z-index: 5;
-    pointer-events: none;
-  }
-
-  .stream-toast-spinner {
-    width: 12px;
-    height: 12px;
-    border: 1.5px solid var(--gm-border);
-    border-top-color: var(--gm-accent, var(--vscode-focusBorder));
-    border-radius: 50%;
-    animation: spin 0.7s linear infinite;
-    flex-shrink: 0;
-  }
-
-  @keyframes spin { to { transform: rotate(360deg); } }
 </style>

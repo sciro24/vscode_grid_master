@@ -18,7 +18,16 @@
   function fmtPct(p: number): string {
     return p.toFixed(1) + '%';
   }
+
+  function onKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      onClose();
+    }
+  }
 </script>
+
+<svelte:window onkeydown={onKeydown} />
 
 <div class="overlay" onclick={onClose} role="presentation" aria-hidden="true"></div>
 

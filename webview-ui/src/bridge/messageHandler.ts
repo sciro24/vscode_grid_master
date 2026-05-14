@@ -55,6 +55,7 @@ export function setupMessageHandler(): () => void {
         uiStore.setSaved(msg.payload.success);
         if (msg.payload.success) {
           gridStore.markHistorySaved();
+          gridStore.clearEditHistory();
         } else if (msg.payload.error) {
           uiStore.setError(`Save failed: ${msg.payload.error}`);
         }
@@ -169,6 +170,9 @@ let _rafPending = false;
 let _streamCapped = false;
 let _lastMemoryCheck = 0;
 let _lastMemoryRatio: number | null = null;
+let _lastUsedHeap = 0;
+let _lastHeapDelta = 0;
+let _highMemStreak = 0;
 
 function _readMemoryRatio(): number | null {
   const mem = (performance as unknown as { memory?: { usedJSHeapSize: number; jsHeapSizeLimit: number } }).memory;

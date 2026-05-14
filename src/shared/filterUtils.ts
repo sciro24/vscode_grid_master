@@ -24,8 +24,8 @@ export function applyFilter(row: CellValue[], f: FilterSpec): boolean {
   const cell = row[f.colIndex];
   const val = f.value;
   switch (f.op) {
-    case 'eq':           return cell == val;
-    case 'neq':          return cell != val;
+    case 'eq':           return cell === val;
+    case 'neq':          return cell !== val;
     case 'contains':     return String(cell ?? '').toLowerCase().includes(String(val).toLowerCase());
     case 'not_contains': return !String(cell ?? '').toLowerCase().includes(String(val).toLowerCase());
     case 'gt':           return Number(cell) > Number(val);
@@ -52,6 +52,13 @@ export function applyFilter(row: CellValue[], f: FilterSpec): boolean {
 }
 
 export function compareValues(a: CellValue, b: CellValue, dir: 'asc' | 'desc'): number {
+  // Nulls always sort to the end regardless of direction.
+  const aNull = a === null || a === undefined;
+  const bNull = b === null || b === undefined;
+  if (aNull && bNull) return 0;
+  if (aNull) return 1;
+  if (bNull) return -1;
+
   const aNum = Number(a);
   const bNum = Number(b);
   let cmp: number;

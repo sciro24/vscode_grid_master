@@ -24,7 +24,16 @@
   // Top distribution bar widths (relative to most common value)
   const topMax = $derived(report?.top[0]?.count ?? 1);
   const histMax = $derived(report?.numeric ? Math.max(...report.numeric.histogram.map(b => b.count), 1) : 1);
+
+  function onKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      onClose();
+    }
+  }
 </script>
+
+<svelte:window onkeydown={onKeydown} />
 
 <div class="overlay" onclick={onClose} role="presentation" aria-hidden="true"></div>
 

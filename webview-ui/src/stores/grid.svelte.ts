@@ -983,7 +983,11 @@ class GridStore {
   }
 
   filterByValue(colIndex: number, value: CellValue): void {
-    this.setFilter({ colIndex, op: 'eq', value: value === null ? null : String(value) });
+    if (value === null) {
+      this.setFilter({ colIndex, op: 'is_null', value: '' });
+    } else {
+      this.setFilter({ colIndex, op: 'eq', value: String(value) });
+    }
   }
 
   // ── Selection ─────────────────────────────────────────────────────────────

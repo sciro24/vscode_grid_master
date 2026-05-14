@@ -27,15 +27,15 @@
   const visibleRowCount = $derived(Math.ceil(viewportHeight / ROW_HEIGHT) + OVERSCAN * 2);
   const maxDataStart = $derived(Math.max(0, totalRows - visibleRowCount));
   const maxScrollTop = $derived(Math.max(1, scrollHeight - viewportHeight));
-  const isNearBottom = $derived.by(() => maxScrollTop - scrollTop <= ROW_HEIGHT * (OVERSCAN + 2));
-  const isAtEnd = $derived.by(() => scrollTop + viewportHeight >= scrollHeight - 1);
+  const isNearBottom = $derived.by(() => scrollHeight > 0 && maxScrollTop - scrollTop <= ROW_HEIGHT * (OVERSCAN + 2));
+  const isAtEnd = $derived.by(() => scrollHeight > 0 && scrollTop + viewportHeight >= scrollHeight - 1);
   const scrollRatio = $derived.by(() => {
     if (!compressedScroll) return 0;
     if (isAtEnd || isNearBottom) return 1;
     return Math.min(1, Math.max(0, scrollTop / maxScrollTop));
   });
 
-  const rawDisplayStartRow = $derived(Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN));
+
 
   const rawDataStartRow = $derived.by(() => {
     if (!compressedScroll) {

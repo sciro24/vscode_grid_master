@@ -18,15 +18,14 @@
     if (gridStore.fileType === 'csv') {
       const content = gridStore.serializeCsv();
       if (content === null) return;
-      // Host writes the bytes and replies with SAVE_ACK; we optimistically clear
-      // the edit history so the dirty indicator updates immediately.
+      // Host writes the bytes and replies with SAVE_ACK; edit history is cleared
+      // when the ack arrives (messageHandler.ts) — not here, in case the write fails.
       postMessage({ type: 'SAVE_DATA', payload: { content } });
     } else {
       // Non-CSV formats: edits live in-memory only. Just notify the host so it
       // can clear its dirty flag (no real write-back yet).
       postMessage({ type: 'SAVE' });
     }
-    gridStore.clearEditHistory();
   }
 
   function handleExport() {
@@ -67,6 +66,12 @@
     // so we don't handle it here (would race with the button's onclick).
   }
 
+  function handleKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      if (showColumnPanel) { showColumnPanel = false; e.stopPropagation(); }
+    }
+  }
+
   const fileName = $derived(gridStore.fileName);
   const isDirty = $derived(uiStore.isDirty);
   const colorsActive = $derived(gridStore.colColors.size > 0);
@@ -76,7 +81,7 @@
 
 </script>
 
-<svelte:window onclick={handleClickOutside} />
+<svelte:window onclick={handleClickOutside} onkeydown={handleKeydown} />
 
 <div class="toolbar" onclick={onToolbarClick} role="presentation">
   <div class="toolbar-left">
