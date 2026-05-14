@@ -11,6 +11,9 @@ class UiStore {
   streamProgress = $state<number | undefined>(undefined);
   filterProgress = $state<number | null>(null);
   parseWarnings = $state<Array<{ row: number; line?: number; message: string }> | null>(null);
+  exportProgress = $state<number | null>(null);
+  exportActive = $state(false);
+  exportDonePath = $state<string | null>(null);
 
   setLoading(active: boolean, message?: string, progress?: number): void {
     this.loading = active;
@@ -24,6 +27,24 @@ class UiStore {
 
   setFilterProgress(pct: number | null): void {
     this.filterProgress = pct;
+  }
+
+  setExportProgress(pct: number | null): void {
+    this.exportProgress = pct;
+    if (pct === null) this.exportActive = false;
+  }
+
+  setExportActive(active: boolean): void {
+    this.exportActive = active;
+    if (active) this.exportDonePath = null;
+  }
+
+  setExportDone(path: string): void {
+    this.exportProgress = null;
+    this.exportActive = false;
+    this.exportDonePath = path;
+    // Auto-clear the done notification after 4 seconds.
+    setTimeout(() => { this.exportDonePath = null; }, 4000);
   }
 
   setParseWarnings(warnings: Array<{ row: number; line?: number; message: string }> | null): void {

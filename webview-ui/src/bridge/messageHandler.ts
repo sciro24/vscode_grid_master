@@ -4,6 +4,7 @@ import type { CellValue, ColumnSchema, InferredType } from '@shared/schema.js';
 import { CHUNK_SIZE, TYPE_INFERENCE_SAMPLE_ROWS } from '@shared/constants.js';
 import { gridStore } from '../stores/grid.svelte.js';
 import { uiStore } from '../stores/ui.svelte.js';
+import { postMessage } from './vscode.js';
 
 type RawCsvMessage    = { type: '__RAW_CSV__';    payload: { text: string; totalBytes: number } };
 type RawCsvBatchMessage = { type: '__RAW_CSV_BATCH__'; payload: {
@@ -52,7 +53,9 @@ export function setupMessageHandler(): () => void {
 
       case 'SAVE_ACK':
         uiStore.setSaved(msg.payload.success);
-        if (!msg.payload.success && msg.payload.error) {
+        if (msg.payload.success) {
+          gridStore.markHistorySaved();
+        } else if (msg.payload.error) {
           uiStore.setError(`Save failed: ${msg.payload.error}`);
         }
         break;
@@ -100,6 +103,33 @@ export function setupMessageHandler(): () => void {
 
       case '__RAW_ROWS__':
         gridStore.receiveRawRows(msg.payload.schema, msg.payload.rows);
+        break;
+
+      case 'WEBVIEW_UNDO':
+        gridStore.undo();
+        _postUndoState();
+        break;
+
+      case 'WEBVIEW_REDO':
+        gridStore.redo();
+        _postUndoState();
+        break;
+
+      case 'EXPORT_START':
+        startStreamingExport(msg.payload.fsPath, msg.payload.format);
+        break;
+
+      case 'EXPORT_PROGRESS':
+        uiStore.setExportProgress(msg.payload.pct);
+        break;
+
+      case 'EXPORT_DONE':
+        uiStore.setExportProgress(null);
+        if (msg.payload.success) {
+          uiStore.setExportDone(msg.payload.path ?? '');
+        } else {
+          uiStore.setError(`Export failed: ${msg.payload.error ?? 'unknown error'}`);
+        }
         break;
 
     }
@@ -353,4 +383,49 @@ function inferSchema(headers: string[], sampleRows: CellValue[][]): ColumnSchema
     const nullCount = samples.filter(v => v === null).length;
     return { name, index, inferredType: inferType(samples), nullable: nullCount > 0 };
   });
+}
+
+// ── Undo state sync ───────────────────────────────────────────────────────────
+
+export function _postUndoState(): void {
+  postMessage({
+    type: 'CAN_UNDO_STATE',
+    payload: { canUndo: gridStore.canUndo, canRedo: gridStore.canRedo },
+  });
+}
+
+// ── Streaming export orchestration ───────────────────────────────────────────
+
+let _exportCancelled = false;
+
+export function cancelExport(): void {
+  _exportCancelled = true;
+  postMessage({ type: 'EXPORT_CANCEL' });
+  uiStore.setExportProgress(null);
+}
+
+function startStreamingExport(fsPath: string, format: 'csv' | 'tsv' | 'json'): void {
+  _exportCancelled = false;
+  uiStore.setExportActive(true);
+
+  // Use scheduler to yield control between batches so UI stays responsive.
+  const gen = gridStore.exportRowBatches(100_000);
+  void (async () => {
+    for (const batch of gen) {
+      if (_exportCancelled) return;
+      postMessage({
+        type: 'EXPORT_DATA_BATCH',
+        payload: {
+          rows: batch.rows,
+          headers: batch.headers,
+          batchIndex: batch.batchIndex,
+          totalBatches: batch.totalBatches,
+          done: batch.done,
+          format,
+        },
+      });
+      // Yield to microtask queue between batches so UI updates are painted.
+      await new Promise<void>(r => setTimeout(r, 0));
+    }
+  })();
 }

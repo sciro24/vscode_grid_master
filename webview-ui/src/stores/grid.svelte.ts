@@ -1,4 +1,4 @@
-import type { ColumnSchema, CellValue, FilterSpec, SortSpec, ColumnStats, SidecarData } from '@shared/schema.js';
+import type { ColumnSchema, CellValue, FilterSpec, SortSpec, ColumnStats, SidecarData, EditOp } from '@shared/schema.js';
 import type { InitPayload, ChunkPayload, EditAckPayload, ColumnStatsPayload } from '@shared/messages.js';
 import type { DuckDbWorkerIn, DuckDbWorkerOut } from '../workers/duckdb.worker.js';
 import { CHUNK_SIZE, MAX_CHUNKS_IN_MEMORY } from '@shared/constants.js';
@@ -30,13 +30,8 @@ export interface ColumnReport {
   };
 }
 
-export type EditAction =
-  | { kind: 'CELL_EDIT'; row: number; col: number; oldValue: CellValue; newValue: CellValue }
-  | { kind: 'ROW_INSERT'; row: number; insertedRow: CellValue[] }
-  | { kind: 'ROW_DELETE'; row: number; deletedRow: CellValue[] }
-  | { kind: 'COL_INSERT'; colIndex: number; insertedCol: ColumnSchema; insertedValues: CellValue[] }
-  | { kind: 'COL_DELETE'; colIndex: number; deletedCol: ColumnSchema; deletedValues: CellValue[] }
-  | { kind: 'COL_RENAME'; colIndex: number; oldName: string; newName: string };
+/** @deprecated Use EditOp from @shared/schema. Kept as alias for callers that import EditAction. */
+export type EditAction = EditOp;
 
 export interface DatasetReport {
   totalRows: number;
@@ -136,6 +131,7 @@ class GridStore {
   // Visual column order: array of schema indices. null = natural (schema) order.
   columnOrder = $state<number[] | null>(null);
 
+
   // Excel multi-sheet
   availableSheets = $state<string[]>([]);
   selectedSheet = $state<string>('');
@@ -154,13 +150,55 @@ class GridStore {
   // Sidecar
   sidecar = $state<SidecarData | null>(null);
 
+
   // Column stats cache
   private _statsCache = new Map<number, ColumnStats>();
 
-  // Edit history for in-webview undo / discard.
-  // Each entry is a strongly-typed action so we can correctly invert it on undo.
-  private _editHistory: EditAction[] = [];
-  editCount = $state(0);  // reactive proxy for _editHistory.length
+  // Edit history: array of commits, each commit is an array of ops applied together.
+  // _historyIndex points PAST the last applied commit (= _commits.length when nothing undone).
+  // Undo: decrement index, invert commit. Redo: apply commit at index, increment.
+  private _commits: EditOp[][] = [];
+  private _historyIndex = 0;
+  // Index at which the file was last saved — used to compute dirty state.
+  private _savedHistoryIndex = 0;
+  // Accumulator for the current in-flight edit group (flushed on commitEdit).
+  private _pendingOps: EditOp[] = [];
+  editCount = $state(0);  // reactive: total committed ops across all commits
+
+  get canUndo(): boolean { return this._historyIndex > 0; }
+  get canRedo(): boolean { return this._historyIndex < this._commits.length; }
+
+  // Push a batch of ops as a single commit. Truncates any redo branch first.
+  // Caps history at 100 commits to keep sidecar size bounded.
+  commitEdit(ops: EditOp[]): void {
+    if (ops.length === 0) return;
+    // Drop redo branch.
+    this._commits = this._commits.slice(0, this._historyIndex);
+    // Adjust savedIndex if it was in the dropped redo branch.
+    if (this._savedHistoryIndex > this._historyIndex) {
+      this._savedHistoryIndex = -1; // can never get back to saved state via redo
+    }
+    this._commits.push(ops);
+    if (this._commits.length > 100) {
+      this._commits.shift();
+      if (this._savedHistoryIndex > 0) this._savedHistoryIndex--;
+    }
+    this._historyIndex = this._commits.length;
+    this.editCount = this._commits.reduce((s, c) => s + c.length, 0);
+    this._updateDirtyState();
+    this._postUndoState();
+    this.persistSidecar();
+  }
+
+  private _updateDirtyState(): void {
+    const isDirty = this._historyIndex !== this._savedHistoryIndex;
+    uiStore.isDirty = isDirty;
+    uiStore.saved = !isDirty;
+  }
+
+  private _postUndoState(): void {
+    postMessage({ type: 'CAN_UNDO_STATE', payload: { canUndo: this.canUndo, canRedo: this.canRedo } });
+  }
 
   // ── Init ──────────────────────────────────────────────────────────────────
 
@@ -197,6 +235,8 @@ class GridStore {
   private _applyPendingSidecar(): void {
     if (this.sidecar && this.schema.length > 0) {
       this._applySidecar(this.sidecar);
+      // Notify host of restored undo capability so UNDO routing is correct from the start.
+      this._postUndoState();
     }
   }
 
@@ -410,6 +450,7 @@ class GridStore {
     return chunk[row - chunkStart]?.[col] ?? null;
   }
 
+
   updateViewport(startRow: number, endRow: number): void {
     this.visibleStartRow = startRow;
     this.visibleEndRow = endRow;
@@ -450,10 +491,8 @@ class GridStore {
         if (rowData) rowData[col] = value;
       }
     }
-    this._editHistory.push({ kind: 'CELL_EDIT', row: actualRow, col, oldValue, newValue: value });
-    this.editCount = this._editHistory.length;
+    this.commitEdit([{ kind: 'CELL_EDIT', row: actualRow, col, oldValue, newValue: value }]);
     this.cacheVersion++;
-    uiStore.markDirty();
   }
 
   // Invert a single action (last-in, first-out) on _csvAllRows + schema.
@@ -541,24 +580,86 @@ class GridStore {
     }
   }
 
-  undoLastEdit(): boolean {
-    const last = this._editHistory.pop();
-    if (!last) return false;
-    this.editCount = this._editHistory.length;
-    this._revertAction(last);
-    if (this._editHistory.length === 0) {
-      uiStore.isDirty = false;
-      uiStore.saved = true;
+  // Forward-apply a single op (used by redo()).
+  private _applyAction(a: EditOp): void {
+    switch (a.kind) {
+      case 'CELL_EDIT':
+        if (this._csvAllRows[a.row]) this._csvAllRows[a.row][a.col] = a.newValue;
+        break;
+      case 'ROW_INSERT':
+        this._csvAllRows.splice(a.row, 0, [...a.insertedRow]);
+        this.totalRows = this._csvAllRows.length;
+        break;
+      case 'ROW_DELETE':
+        if (this._csvAllRows.length > a.row) this._csvAllRows.splice(a.row, 1);
+        this.totalRows = this._csvAllRows.length;
+        break;
+      case 'COL_INSERT': {
+        for (let i = 0; i < this._csvAllRows.length; i++) {
+          this._csvAllRows[i].splice(a.colIndex, 0, a.insertedValues[i] ?? null);
+        }
+        const newCol = { ...a.insertedCol, index: a.colIndex };
+        this.schema = [
+          ...this.schema.slice(0, a.colIndex).map(c => ({ ...c })),
+          newCol,
+          ...this.schema.slice(a.colIndex).map(c => ({ ...c, index: c.index + 1 })),
+        ];
+        break;
+      }
+      case 'COL_DELETE':
+        for (const row of this._csvAllRows) row.splice(a.colIndex, 1);
+        this.schema = this.schema
+          .filter((_, i) => i !== a.colIndex)
+          .map((c, i) => ({ ...c, index: i }));
+        break;
+      case 'COL_RENAME':
+        this.schema = this.schema.map((c, i) => i === a.colIndex ? { ...c, name: a.newName } : c);
+        break;
     }
+  }
+
+  undoLastEdit(): boolean {
+    return this.undo();
+  }
+
+  undo(): boolean {
+    if (!this.canUndo) return false;
+    this._historyIndex--;
+    const commit = this._commits[this._historyIndex];
+    for (let i = commit.length - 1; i >= 0; i--) {
+      this._revertAction(commit[i]);
+    }
+    this.editCount = this._commits.reduce((s, c) => s + c.length, 0);
+    this._updateDirtyState();
+    this._postUndoState();
     this._invalidateCache();
+    this.persistSidecar();
+    return true;
+  }
+
+  redo(): boolean {
+    if (!this.canRedo) return false;
+    const commit = this._commits[this._historyIndex];
+    for (const op of commit) {
+      this._applyAction(op);
+    }
+    this._historyIndex++;
+    this.editCount = this._commits.reduce((s, c) => s + c.length, 0);
+    this._updateDirtyState();
+    this._postUndoState();
+    this._invalidateCache();
+    this.persistSidecar();
     return true;
   }
 
   discardAllEdits(): void {
-    // Walk the history in reverse, inverting each action.
-    while (this._editHistory.length > 0) {
-      const a = this._editHistory.pop()!;
-      this._revertAction(a);
+    // Walk commits from historyIndex down to 0, inverting each.
+    while (this._historyIndex > 0) {
+      this._historyIndex--;
+      const commit = this._commits[this._historyIndex];
+      for (let i = commit.length - 1; i >= 0; i--) {
+        this._revertAction(commit[i]);
+      }
     }
     this.editCount = 0;
     uiStore.isDirty = false;
@@ -567,10 +668,19 @@ class GridStore {
   }
 
   clearEditHistory(): void {
-    this._editHistory = [];
+    this._commits = [];
+    this._historyIndex = 0;
+    this._savedHistoryIndex = 0;
+    this._pendingOps = [];
     this.editCount = 0;
     uiStore.isDirty = false;
     uiStore.saved = true;
+  }
+
+  // Mark the current history position as "saved" so dirty tracking is correct.
+  markHistorySaved(): void {
+    this._savedHistoryIndex = this._historyIndex;
+    this._updateDirtyState();
   }
 
   // Serialise the full dataset back to CSV/TSV text, preserving the rename/insert/
@@ -596,8 +706,30 @@ class GridStore {
     });
   }
 
+
   updateSchema(schema: ColumnSchema[]): void {
     this.schema = schema;
+  }
+
+  // Yields row batches for streaming export. Each batch is EXPORT_BATCH_SIZE raw rows.
+  // Caller is responsible for sending EXPORT_DATA_BATCH messages and EXPORT_CANCEL on abort.
+  *exportRowBatches(batchSize = 100_000): Generator<{ rows: import('@shared/schema.js').CellValue[][]; headers: string[]; batchIndex: number; totalBatches: number; done: boolean }> {
+    const headers = this.schema.map(c => c.name);
+    const total = this._csvAllRows.length;
+    const totalBatches = Math.max(1, Math.ceil(total / batchSize));
+    for (let i = 0; i < totalBatches; i++) {
+      const start = i * batchSize;
+      const end = Math.min(start + batchSize, total);
+      const rows = this._csvAllRows.slice(start, end).map((row) => {
+        return [
+          ...this.schema.map(c => {
+            const v = row[c.index];
+            return (v === null || v === undefined) ? null : v;
+          }),
+        ];
+      });
+      yield { rows, headers, batchIndex: i, totalBatches, done: i === totalBatches - 1 };
+    }
   }
 
   // ── Filters & Sort ────────────────────────────────────────────────────────
@@ -664,10 +796,8 @@ class GridStore {
     if (!removed) return;
     this._csvAllRows.splice(actual, 1);
     this.totalRows = this._csvAllRows.length;
-    this._editHistory.push({ kind: 'ROW_DELETE', row: actual, deletedRow: [...removed] });
-    this.editCount = this._editHistory.length;
+    this.commitEdit([{ kind: 'ROW_DELETE', row: actual, deletedRow: [...removed] }]);
     this._invalidateCache();
-    uiStore.markDirty();
   }
 
   insertRowAbove(visibleRow: number): void {
@@ -678,10 +808,8 @@ class GridStore {
     const empty = new Array(this.schema.length).fill(null) as CellValue[];
     this._csvAllRows.splice(actual, 0, empty);
     this.totalRows = this._csvAllRows.length;
-    this._editHistory.push({ kind: 'ROW_INSERT', row: actual, insertedRow: [...empty] });
-    this.editCount = this._editHistory.length;
+    this.commitEdit([{ kind: 'ROW_INSERT', row: actual, insertedRow: [...empty] }]);
     this._invalidateCache();
-    uiStore.markDirty();
   }
 
   insertRowBelow(visibleRow: number): void {
@@ -693,10 +821,8 @@ class GridStore {
     const at = actual + 1;
     this._csvAllRows.splice(at, 0, empty);
     this.totalRows = this._csvAllRows.length;
-    this._editHistory.push({ kind: 'ROW_INSERT', row: at, insertedRow: [...empty] });
-    this.editCount = this._editHistory.length;
+    this.commitEdit([{ kind: 'ROW_INSERT', row: at, insertedRow: [...empty] }]);
     this._invalidateCache();
-    uiStore.markDirty();
   }
 
   duplicateRow(visibleRow: number): void {
@@ -710,10 +836,8 @@ class GridStore {
     const at = actual + 1;
     this._csvAllRows.splice(at, 0, copy);
     this.totalRows = this._csvAllRows.length;
-    this._editHistory.push({ kind: 'ROW_INSERT', row: at, insertedRow: [...copy] });
-    this.editCount = this._editHistory.length;
+    this.commitEdit([{ kind: 'ROW_INSERT', row: at, insertedRow: [...copy] }]);
     this._invalidateCache();
-    uiStore.markDirty();
   }
 
   copyRowToClipboard(visibleRow: number): void {
@@ -769,10 +893,8 @@ class GridStore {
       }
       this.hiddenCols = next;
     }
-    this._editHistory.push({ kind: 'COL_DELETE', colIndex, deletedCol: { ...deletedCol }, deletedValues });
-    this.editCount = this._editHistory.length;
+    this.commitEdit([{ kind: 'COL_DELETE', colIndex, deletedCol: { ...deletedCol }, deletedValues }]);
     this._invalidateCache();
-    uiStore.markDirty();
   }
 
   duplicateColumn(colIndex: number): void {
@@ -812,10 +934,8 @@ class GridStore {
       for (const k of this.hiddenCols) next.add(k > colIndex ? k + 1 : k);
       this.hiddenCols = next;
     }
-    this._editHistory.push({ kind: 'COL_INSERT', colIndex: colIndex + 1, insertedCol: { ...newCol }, insertedValues });
-    this.editCount = this._editHistory.length;
+    this.commitEdit([{ kind: 'COL_INSERT', colIndex: colIndex + 1, insertedCol: { ...newCol }, insertedValues }]);
     this._invalidateCache();
-    uiStore.markDirty();
   }
 
   renameColumn(colIndex: number, newName: string): boolean {
@@ -838,11 +958,8 @@ class GridStore {
       next.set(trimmed, w);
       this.colWidths = next;
     }
-    this._editHistory.push({ kind: 'COL_RENAME', colIndex, oldName, newName: trimmed });
-    this.editCount = this._editHistory.length;
+    this.commitEdit([{ kind: 'COL_RENAME', colIndex, oldName, newName: trimmed }]);
     this.cacheVersion++;
-    uiStore.markDirty();
-    this.persistSidecar();
     return true;
   }
 
@@ -1493,6 +1610,22 @@ class GridStore {
       if (sidecar.frozenCols?.length) {
         this.frozenCols = new Set(sidecar.frozenCols);
       }
+
+
+      // Edit history — restore commits and replay up to historyIndex.
+      // Data (_csvAllRows) is already at its current state from the file; history
+      // lets users undo/redo edits that were made before the last save.
+      // We only restore the history structure — we do NOT re-apply ops since the
+      // saved file already reflects the state at historyIndex.
+      if (sidecar.editHistory?.length) {
+        this._commits = sidecar.editHistory;
+        this._historyIndex = Math.min(
+          sidecar.historyIndex ?? sidecar.editHistory.length,
+          sidecar.editHistory.length,
+        );
+        this._savedHistoryIndex = this._historyIndex;
+        this.editCount = this._commits.reduce((s, c) => s + c.length, 0);
+      }
     } finally {
       this._applyingSidecar = false;
     }
@@ -1536,7 +1669,26 @@ class GridStore {
       columnOrder: this.columnOrder ?? undefined,
       frozenCols: this.frozenCols.size > 0 ? [...this.frozenCols] : undefined,
       selectedSheet: this.selectedSheet || undefined,
+      ...(this._commits.length > 0 ? this._buildEditHistorySidecar() : {}),
     };
+  }
+
+  private _buildEditHistorySidecar(): { editHistory: EditOp[][]; historyIndex: number } {
+    const MAX_BYTES = 2 * 1024 * 1024; // 2 MB
+    let commits = this._commits.slice(); // copy
+    let historyIndex = this._historyIndex;
+    // Drop oldest commits until JSON fits under 2 MB.
+    while (commits.length > 0) {
+      const serialized = JSON.stringify(commits);
+      if (serialized.length <= MAX_BYTES) break;
+      commits.shift();
+      // Keep historyIndex in bounds after dropping from the front.
+      if (historyIndex > 0) historyIndex--;
+      if (this._savedHistoryIndex > 0) {
+        // savedIndex shifts too — adjust in place (non-mutating, just for serialization).
+      }
+    }
+    return { editHistory: commits, historyIndex };
   }
 
   // Debounced persistence: callers invoke this after every UI mutation that
@@ -1544,6 +1696,7 @@ class GridStore {
   // The host writes .gridmaster.json next to the data file.
   private _sidecarSaveTimer: number | null = null;
   private _applyingSidecar = false;
+
 
   persistSidecar(): void {
     // Skip while restoring from disk — we'd just rewrite what we just read.

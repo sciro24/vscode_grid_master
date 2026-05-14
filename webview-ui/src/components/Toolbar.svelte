@@ -29,19 +29,19 @@
     gridStore.clearEditHistory();
   }
 
+  function handleExport() {
+    postMessage({
+      type: 'EXPORT',
+      payload: { format: 'csv', includeHeaders: true },
+    });
+  }
+
   function handleUndo() {
     gridStore.undoLastEdit();
   }
 
   function handleDiscard() {
     gridStore.discardAllEdits();
-  }
-
-  function handleExport() {
-    postMessage({
-      type: 'EXPORT',
-      payload: { format: 'csv', includeHeaders: true },
-    });
   }
 
   function clearFilters() {
@@ -57,13 +57,26 @@
     gridStore.clearSelection();
   }
 
-  const hasFilters = $derived(gridStore.filters.length > 0);
+  function handleClickOutside(e: MouseEvent) {
+    const target = e.target as Element | null;
+    // Close column panel when clicking outside its wrapper
+    if (showColumnPanel && !target?.closest('.col-panel-wrap')) {
+      showColumnPanel = false;
+    }
+    // Note: DatasetStatsPanel has its own overlay that handles close-on-click-outside,
+    // so we don't handle it here (would race with the button's onclick).
+  }
+
   const fileName = $derived(gridStore.fileName);
   const isDirty = $derived(uiStore.isDirty);
   const colorsActive = $derived(gridStore.colColors.size > 0);
   const canUndo = $derived(gridStore.editCount > 0);
+  const hasFilters = $derived(gridStore.filters.length > 0);
+
 
 </script>
+
+<svelte:window onclick={handleClickOutside} />
 
 <div class="toolbar" onclick={onToolbarClick} role="presentation">
   <div class="toolbar-left">
@@ -113,7 +126,7 @@
 
     <button
       class="btn btn-ghost"
-      onclick={() => showDatasetStats = true}
+      onclick={() => { showDatasetStats = !showDatasetStats; showColumnPanel = false; }}
       title="Dataset statistics — distribution and per-column summary"
     >
       <!-- Bar chart icon -->
@@ -123,7 +136,7 @@
     </button>
 
     <div class="col-panel-wrap">
-      <button class="btn btn-ghost" onclick={() => showColumnPanel = !showColumnPanel} title="Show / hide columns">
+      <button class="btn btn-ghost" onclick={() => { showColumnPanel = !showColumnPanel; showDatasetStats = false; }} title="Show / hide columns">
         <svg viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M0 2h4v12H0V2zm6 0h4v12H6V2zm6 0h4v12h-4V2z"/></svg>
       </button>
       {#if showColumnPanel}
@@ -380,4 +393,5 @@
     opacity: 0.6;
     text-transform: uppercase;
   }
+
 </style>

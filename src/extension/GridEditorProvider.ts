@@ -31,6 +31,18 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
 
   constructor(private readonly _context: vscode.ExtensionContext) {}
 
+  // ── Undo/redo capability state (per panel) ───────────────────────────────
+  private _undoState = new WeakMap<vscode.Webview, { canUndo: boolean; canRedo: boolean }>();
+
+  // ── Export state (per-panel, keyed by panel webview) ─────────────────────
+  private _exportStreams = new WeakMap<vscode.Webview, {
+    stream: fs.WriteStream;
+    fsPath: string;
+    cancelled: boolean;
+    format: 'csv' | 'tsv' | 'json';
+    jsonStarted: boolean;
+  }>();
+
   // ── CustomEditorProvider ──────────────────────────────────────────────────
 
   async openCustomDocument(
@@ -187,13 +199,30 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
         break;
       }
 
-      case 'UNDO':
-        await vscode.commands.executeCommand('undo');
+      case 'CAN_UNDO_STATE':
+        this._undoState.set(panel.webview, msg.payload);
         break;
 
-      case 'REDO':
-        await vscode.commands.executeCommand('redo');
+      case 'UNDO': {
+        const undoState = this._undoState.get(panel.webview);
+        if (undoState?.canUndo) {
+          // Webview has history — let it handle undo.
+          send({ type: 'WEBVIEW_UNDO' });
+        } else {
+          await vscode.commands.executeCommand('undo');
+        }
         break;
+      }
+
+      case 'REDO': {
+        const redoState = this._undoState.get(panel.webview);
+        if (redoState?.canRedo) {
+          send({ type: 'WEBVIEW_REDO' });
+        } else {
+          await vscode.commands.executeCommand('redo');
+        }
+        break;
+      }
 
       case 'SAVE_SIDECAR':
         await GridEditorProvider._fileReader.writeSidecar(document.uri, msg.payload.sidecar);
@@ -202,6 +231,14 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
 
       case 'EXPORT':
         await this._handleExport(msg.payload, panel);
+        break;
+
+      case 'EXPORT_DATA_BATCH':
+        await this._handleExportBatch(msg.payload, panel);
+        break;
+
+      case 'EXPORT_CANCEL':
+        this._cancelExport(panel);
         break;
     }
   }
@@ -239,22 +276,26 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
       };
       const parquetWasmB64 = await readDistB64('parquet_wasm_bg.wasm');
 
-      const duckBundles = { parquetWasmB64 };
+      const duckBundles = {
+        parquetWasmB64,
+        duckdbWasmUrl: duckAsset('duckdb-mvp.wasm'),
+        duckdbWorkerUrl: duckAsset('duckdb-browser-mvp.worker.js'),
+      };
 
       if (document.fileType === 'orc') {
-        await this._sendOrcData(document, panel, fileName, totalBytes, parquetWasmB64, duckWorkerUrl);
+        await this._sendOrcData(document, panel, fileName, totalBytes, parquetWasmB64, duckWorkerUrl, { duckdbWasmUrl: duckBundles.duckdbWasmUrl!, duckdbWorkerUrl: duckBundles.duckdbWorkerUrl! });
         send({ type: 'LOADING', payload: { active: false } });
         return;
       }
 
       if (document.fileType === 'sqlite') {
-        await this._sendSqliteData(document, panel, fileName, totalBytes, parquetWasmB64, duckWorkerUrl);
+        await this._sendSqliteData(document, panel, fileName, totalBytes, parquetWasmB64, duckWorkerUrl, { duckdbWasmUrl: duckBundles.duckdbWasmUrl!, duckdbWorkerUrl: duckBundles.duckdbWorkerUrl! });
         send({ type: 'LOADING', payload: { active: false } });
         return;
       }
 
       if (document.fileType === 'avro') {
-        await this._sendAvroData(document, panel, fileName, totalBytes, parquetWasmB64, duckWorkerUrl);
+        await this._sendAvroData(document, panel, fileName, totalBytes, parquetWasmB64, duckWorkerUrl, { duckdbWasmUrl: duckBundles.duckdbWasmUrl!, duckdbWorkerUrl: duckBundles.duckdbWorkerUrl! });
         send({ type: 'LOADING', payload: { active: false } });
         return;
       }
@@ -635,6 +676,7 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
     totalBytes: number,
     parquetWasmB64: string,
     duckWorkerUrl: string,
+    duckdbBundleExtra?: { duckdbWasmUrl: string; duckdbWorkerUrl: string },
   ): Promise<void> {
     const send = (m: HostMessage) => panel.webview.postMessage(m);
 
@@ -707,7 +749,7 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
       })
     );
 
-    const duckBundles = { parquetWasmB64 };
+    const duckBundles = { parquetWasmB64, ...duckdbBundleExtra };
 
     send({
       type: 'INIT',
@@ -738,6 +780,7 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
     totalBytes: number,
     parquetWasmB64: string,
     duckWorkerUrl: string,
+    duckdbBundleExtra?: { duckdbWasmUrl: string; duckdbWorkerUrl: string },
   ): Promise<void> {
     const send = (m: HostMessage) => panel.webview.postMessage(m);
     const { execFile } = await import('child_process');
@@ -836,7 +879,7 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
       })
     );
 
-    const duckBundles = { parquetWasmB64 };
+    const duckBundles = { parquetWasmB64, ...duckdbBundleExtra };
 
     send({
       type: 'INIT',
@@ -867,6 +910,7 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
     totalBytes: number,
     parquetWasmB64: string,
     duckWorkerUrl: string,
+    duckdbBundleExtra?: { duckdbWasmUrl: string; duckdbWorkerUrl: string },
   ): Promise<void> {
     const send = (m: HostMessage) => panel.webview.postMessage(m);
 
@@ -919,7 +963,7 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
         })
       );
 
-      const duckBundles = { parquetWasmB64 };
+      const duckBundles = { parquetWasmB64, ...duckdbBundleExtra };
 
       send({
         type: 'INIT',
@@ -948,13 +992,92 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
     payload: import('../shared/messages.js').ExportPayload,
     panel: vscode.WebviewPanel,
   ): Promise<void> {
-    const ext = payload.format === 'tsv' ? 'tsv' : payload.format === 'json' ? 'json' : 'csv';
+    const fmt = payload.format === 'tsv' ? 'tsv' : payload.format === 'json' ? 'json' : 'csv';
     const uri = await vscode.window.showSaveDialog({
-      filters: { 'Data files': [ext] },
-      defaultUri: vscode.Uri.file(`export.${ext}`),
+      filters: { 'Data files': [fmt] },
+      defaultUri: vscode.Uri.file(`export.${fmt}`),
     });
     if (!uri) return;
-    panel.webview.postMessage({ type: '__EXPORT_PATH__', payload: { fsPath: uri.fsPath } });
+
+    // Create write stream before telling webview to start — avoids race.
+    const writeStream = fs.createWriteStream(uri.fsPath, { encoding: 'utf8' });
+    this._exportStreams.set(panel.webview, {
+      stream: writeStream,
+      fsPath: uri.fsPath,
+      cancelled: false,
+      format: fmt as 'csv' | 'tsv' | 'json',
+      jsonStarted: false,
+    });
+
+    panel.webview.postMessage({
+      type: 'EXPORT_START',
+      payload: { fsPath: uri.fsPath, format: fmt as 'csv' | 'tsv' | 'json' },
+    });
+  }
+
+  private async _handleExportBatch(
+    payload: import('../shared/messages.js').ExportDataBatchPayload,
+    panel: vscode.WebviewPanel,
+  ): Promise<void> {
+    const state = this._exportStreams.get(panel.webview);
+    if (!state || state.cancelled) return;
+
+    const { stream, format } = state;
+    const { rows, headers, batchIndex, totalBatches, done } = payload;
+
+    await new Promise<void>((resolve, reject) => {
+      let chunk = '';
+      if (format === 'json') {
+        if (!state.jsonStarted) {
+          chunk += '[';
+          state.jsonStarted = true;
+        }
+        const jsonRows = rows.map(row => {
+          const obj: Record<string, import('../shared/schema.js').CellValue> = {};
+          (headers ?? []).forEach((h, i) => { obj[h] = row[i] ?? null; });
+          return JSON.stringify(obj);
+        });
+        chunk += jsonRows.join(',\n');
+        if (done) chunk += ']';
+      } else {
+        // CSV/TSV — first batch includes headers
+        if (batchIndex === 0 && headers) {
+          const del = format === 'tsv' ? '\t' : ',';
+          chunk += headers.map(h => _csvEscape(h, del)).join(del) + '\n';
+        }
+        const del = format === 'tsv' ? '\t' : ',';
+        chunk += rows.map(row =>
+          row.map(v => {
+            if (v === null || v === undefined) return '';
+            return _csvEscape(typeof v === 'boolean' ? (v ? 'true' : 'false') : String(v), del);
+          }).join(del)
+        ).join('\n');
+        if (rows.length > 0) chunk += '\n';
+      }
+
+      stream.write(chunk, (err) => err ? reject(err) : resolve());
+    });
+
+    const pct = Math.round(((batchIndex + 1) / totalBatches) * 100);
+    panel.webview.postMessage({ type: 'EXPORT_PROGRESS', payload: { pct } });
+
+    if (done) {
+      await new Promise<void>((resolve) => stream.end(resolve));
+      this._exportStreams.delete(panel.webview);
+      panel.webview.postMessage({
+        type: 'EXPORT_DONE',
+        payload: { success: true, path: state.fsPath },
+      });
+    }
+  }
+
+  private _cancelExport(panel: vscode.WebviewPanel): void {
+    const state = this._exportStreams.get(panel.webview);
+    if (!state) return;
+    state.cancelled = true;
+    state.stream.destroy();
+    try { fs.unlinkSync(state.fsPath); } catch { /* ignore */ }
+    this._exportStreams.delete(panel.webview);
   }
 
   // ── Webview HTML ──────────────────────────────────────────────────────────
@@ -1056,4 +1179,11 @@ function inferSchema(headers: string[], sampleRows: CellValue[][]): ColumnSchema
     const nullCount = samples.filter(v => v === null).length;
     return { name, index, inferredType: inferTypeFromSamples(samples), nullable: nullCount > 0 };
   });
+}
+
+function _csvEscape(value: string, delimiter: string): string {
+  if (value.includes('"') || value.includes(delimiter) || value.includes('\n') || value.includes('\r')) {
+    return '"' + value.replace(/"/g, '""') + '"';
+  }
+  return value;
 }

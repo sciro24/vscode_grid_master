@@ -79,7 +79,6 @@
     {/if}
   </div>
 
-
   <StatusBar />
 </div>
 

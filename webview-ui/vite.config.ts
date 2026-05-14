@@ -3,27 +3,19 @@ import { svelte } from '@sveltejs/vite-plugin-svelte';
 import wasm from 'vite-plugin-wasm';
 import topLevelAwait from 'vite-plugin-top-level-await';
 import path from 'path';
-import { promises as fs, createWriteStream } from 'fs';
-import https from 'https';
+import { promises as fs } from 'fs';
 
-// Copy DuckDB-WASM runtime assets into dist so the extension host can read
-// them at startup and pass them to the webview as base64.
-// Extensions are downloaded from extensions.duckdb.org at build time so the
-// vsix ships everything needed offline.
-function copyDuckDbAssets(): Plugin {
-  // Copy parquet-wasm runtime into dist so the host can read it and pass it
-  // as base64 to the webview worker.
+// Copy parquet-wasm runtime into dist so the host can read it and pass it
+// as base64 to the webview worker.
+function copyWorkerAssets(): Plugin {
   const FROM_NPM: { src: string; dst: string }[] = [
     { src: 'parquet-wasm/esm/parquet_wasm_bg.wasm', dst: 'parquet_wasm_bg.wasm' },
   ];
-  const EXT_BASE = '';
-  const EXTENSIONS: string[] = [];
 
   return {
-    name: 'copy-duckdb-assets',
+    name: 'copy-worker-assets',
     apply: 'build',
     async closeBundle() {
-      const src = path.resolve(__dirname, 'node_modules/@duckdb/duckdb-wasm/dist');
       const dst = path.resolve(__dirname, 'dist');
       await fs.mkdir(dst, { recursive: true });
 
@@ -33,32 +25,9 @@ function copyDuckDbAssets(): Plugin {
         try {
           await fs.copyFile(srcPath, dstPath);
           const stat = await fs.stat(dstPath);
-          console.log(`[copy-duckdb-assets] copied ${entry.dst} (${stat.size} bytes)`);
+          console.log(`[copy-worker-assets] copied ${entry.dst} (${stat.size} bytes)`);
         } catch (e) {
-          console.warn(`[copy-duckdb-assets] could not copy ${entry.dst}:`, e);
-        }
-      }
-
-      for (const f of EXTENSIONS) {
-        const dstPath = path.join(dst, f);
-        // Skip download if file already present and non-empty.
-        try {
-          const stat = await fs.stat(dstPath);
-          if (stat.size > 0) continue;
-        } catch { /* not present, download */ }
-
-        try {
-          await new Promise<void>((resolve, reject) => {
-            const file = createWriteStream(dstPath);
-            https.get(`${EXT_BASE}/${f}`, (res) => {
-              res.pipe(file);
-              file.on('finish', () => { file.close(); resolve(); });
-            }).on('error', (e) => { fs.unlink(dstPath).catch(() => {}); reject(e); });
-          });
-          const stat = await fs.stat(dstPath);
-          console.log(`[copy-duckdb-assets] downloaded ${f} (${stat.size} bytes)`);
-        } catch (e) {
-          console.warn(`[copy-duckdb-assets] failed to download ${f}:`, e);
+          console.warn(`[copy-worker-assets] could not copy ${entry.dst}:`, e);
         }
       }
     },
@@ -105,7 +74,7 @@ export default defineConfig(() => {
 
   // Main webview app build.
   return {
-    plugins: [svelte(), copyDuckDbAssets()],
+    plugins: [svelte(), copyWorkerAssets()],
     build: {
       outDir: 'dist',
       // Don't wipe the worker output produced by the previous pass.

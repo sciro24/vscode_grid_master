@@ -10,6 +10,10 @@ export type HostMessage =
   | { type: 'SAVE_ACK';              payload: SaveAckPayload }
   | { type: 'COLUMN_STATS';          payload: ColumnStatsPayload }
   | { type: 'EXPORT_DONE';           payload: ExportDonePayload }
+  | { type: 'EXPORT_START';          payload: ExportStartPayload }
+  | { type: 'EXPORT_PROGRESS';       payload: ExportProgressPayload }
+  | { type: 'WEBVIEW_UNDO' }
+  | { type: 'WEBVIEW_REDO' }
   | { type: 'LOADING';               payload: LoadingPayload }
   | { type: 'ERROR';                 payload: ErrorPayload }
   | { type: '__LARGE_FILE_WARNING__'; payload: LargeFileWarningPayload };
@@ -57,6 +61,16 @@ export interface ExportDonePayload {
   error?: string;
 }
 
+export interface ExportStartPayload {
+  fsPath: string;
+  format: 'csv' | 'tsv' | 'json';
+}
+
+export interface ExportProgressPayload {
+  pct: number;
+}
+
+
 export interface LoadingPayload {
   active: boolean;
   message?: string;
@@ -77,6 +91,7 @@ export interface LargeFileWarningPayload {
 
 export type WebviewMessage =
   | { type: 'READY' }
+  | { type: 'CAN_UNDO_STATE';          payload: { canUndo: boolean; canRedo: boolean } }
   | { type: 'REQUEST_CHUNK';           payload: ChunkRequestPayload }
   | { type: 'EDIT';                    payload: EditPayload }
   | { type: 'BATCH_EDIT';             payload: BatchEditPayload }
@@ -85,6 +100,9 @@ export type WebviewMessage =
   | { type: 'UNDO' }
   | { type: 'REDO' }
   | { type: 'EXPORT';                 payload: ExportPayload }
+  | { type: 'EXPORT_DATA';            payload: ExportDataPayload }
+  | { type: 'EXPORT_DATA_BATCH';      payload: ExportDataBatchPayload }
+  | { type: 'EXPORT_CANCEL' }
   | { type: 'SAVE_SIDECAR';          payload: SaveSidecarPayload }
   | { type: 'UPDATE_DELIMITER';       payload: UpdateDelimiterPayload }
   | { type: 'LARGE_FILE_OPEN_CONFIRM' }
@@ -135,6 +153,20 @@ export interface SaveSidecarPayload {
 
 export interface UpdateDelimiterPayload {
   delimiter: string;
+}
+
+export interface ExportDataPayload {
+  data: string;
+}
+
+export interface ExportDataBatchPayload {
+  rows: import('./schema.js').CellValue[][];
+  headers?: string[];
+  batchIndex: number;
+  totalBatches: number;
+  done: boolean;
+  format: 'csv' | 'tsv' | 'json';
+  delimiter?: string;
 }
 
 export interface ParseWarning {

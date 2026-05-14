@@ -39,6 +39,15 @@ export interface ColumnStats {
   topValues: Array<{ value: CellValue; count: number }>;
 }
 
+
+export type EditOp =
+  | { kind: 'CELL_EDIT'; row: number; col: number; oldValue: CellValue; newValue: CellValue }
+  | { kind: 'ROW_INSERT'; row: number; insertedRow: CellValue[] }
+  | { kind: 'ROW_DELETE'; row: number; deletedRow: CellValue[] }
+  | { kind: 'COL_INSERT'; colIndex: number; insertedCol: ColumnSchema; insertedValues: CellValue[] }
+  | { kind: 'COL_DELETE'; colIndex: number; deletedCol: ColumnSchema; deletedValues: CellValue[] }
+  | { kind: 'COL_RENAME'; colIndex: number; oldName: string; newName: string };
+
 export interface SidecarData {
   version: 1;
   columnOverrides: Record<string, InferredType>; // col name → type
@@ -58,6 +67,10 @@ export interface SidecarData {
   frozenCols?: number[];
   /** Last selected sheet name for Excel files. Absent = first sheet. */
   selectedSheet?: string;
+  /** Committed edit history for undo/redo across sessions. Each entry is one commit (array of ops). */
+  editHistory?: EditOp[][];
+  /** Pointer into editHistory: next undo target = editHistory[historyIndex - 1]. */
+  historyIndex?: number;
 }
 
 export interface Bookmark {

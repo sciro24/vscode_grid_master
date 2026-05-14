@@ -1,5 +1,5 @@
 // Data worker — reads Parquet, Arrow and JSON files using parquet-wasm +
-// apache-arrow. No external network calls, no DuckDB extension issues.
+// apache-arrow.
 
 import * as arrow from 'apache-arrow';
 import init, { readParquet } from 'parquet-wasm/esm/parquet_wasm.js';
@@ -10,8 +10,7 @@ import { applyFilter, compareValues } from '@shared/filterUtils.js';
 
 let _parquetInited = false;
 
-// Kept as DuckDbBundleSet for backward-compat with store wiring; only parquetWasmB64 is used.
-// the worker no longer uses DuckDB. Keep the type to avoid a bigger refactor.
+
 export type DuckDbBundleSet = {
   parquetWasmB64?: string;
 };
@@ -19,13 +18,11 @@ export type DuckDbBundleSet = {
 export type DuckDbWorkerIn =
   | { type: 'LOAD'; payload: { buffer: ArrayBuffer; fileType: 'parquet' | 'arrow' | 'json' | 'excel' | 'avro'; jsonFormat?: 'json' | 'ndjson'; bundles: DuckDbBundleSet; sheetName?: string } }
   | { type: 'LOAD_PARTS'; payload: { buffers: ArrayBuffer[]; fileType: 'parquet' | 'arrow'; bundles: DuckDbBundleSet } }
-  | { type: 'GET_CHUNK'; payload: { requestId: string; startRow: number; endRow: number; filters?: FilterSpec[]; sort?: SortSpec; globalSearch?: string } }
-  | { type: 'QUERY'; payload: { requestId: string; sql: string } };
+  | { type: 'GET_CHUNK'; payload: { requestId: string; startRow: number; endRow: number; filters?: FilterSpec[]; sort?: SortSpec; globalSearch?: string } };
 
 export type DuckDbWorkerOut =
   | { type: 'READY'; payload: { schema: ColumnSchema[]; totalRows: number; availableSheets?: string[]; selectedSheet?: string } }
   | { type: 'CHUNK'; payload: { requestId: string; rows: CellValue[][]; startRow: number; endRow: number; filteredTotal: number } }
-  | { type: 'QUERY_RESULT'; payload: { requestId: string; rows: CellValue[][]; columns: string[] } }
   | { type: 'ERROR'; payload: { message: string } };
 
 // ── In-memory table ───────────────────────────────────────────────────────────
@@ -51,7 +48,6 @@ self.onmessage = async (e: MessageEvent<DuckDbWorkerIn>) => {
       case 'LOAD':       await handleLoad(msg.payload.buffer, msg.payload.fileType, msg.payload.bundles, msg.payload.jsonFormat, msg.payload.sheetName); break;
       case 'LOAD_PARTS': await handleLoadParts(msg.payload.buffers, msg.payload.fileType, msg.payload.bundles); break;
       case 'GET_CHUNK':  handleGetChunk(msg.payload); break;
-      case 'QUERY':      break; // not implemented in this backend
     }
   } catch (err) {
     console.error('[GM worker] error in', msg.type, err);

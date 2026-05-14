@@ -1,6 +1,7 @@
 <script lang="ts">
   import { gridStore } from '../stores/grid.svelte.js';
   import { uiStore } from '../stores/ui.svelte.js';
+  import { cancelExport } from '../bridge/messageHandler.js';
 
   function formatBytes(bytes: number): string {
     if (bytes < 1024) return `${bytes} B`;
@@ -100,6 +101,14 @@
   </div>
 
   <div class="status-right">
+    {#if uiStore.exportActive || uiStore.exportProgress !== null}
+      <span class="status-badge export-progress-badge">
+        Exporting… {uiStore.exportProgress ?? 0}%
+      </span>
+      <button class="cancel-btn" onclick={cancelExport} title="Cancel export">✕</button>
+    {:else if uiStore.exportDonePath !== null}
+      <span class="status-badge export-done-badge" title={uiStore.exportDonePath}>Exported ✓</span>
+    {/if}
     {#if uiStore.filterProgress !== null}
       <span class="status-badge filter-progress-badge">Filtering… {uiStore.filterProgress}%</span>
     {/if}
@@ -205,5 +214,31 @@
   .filter-progress-badge {
     background: var(--gm-accent-light);
     color: var(--gm-accent);
+  }
+
+  .export-progress-badge {
+    background: rgba(80, 160, 255, 0.15);
+    color: var(--vscode-progressBar-background, #0e70c0);
+  }
+
+  .export-done-badge {
+    background: rgba(80, 200, 120, 0.15);
+    color: var(--gm-success);
+  }
+
+  .cancel-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--gm-fg-muted);
+    font-size: 10px;
+    padding: 0 3px;
+    line-height: 1;
+    border-radius: 2px;
+  }
+
+  .cancel-btn:hover {
+    color: var(--vscode-errorForeground, #f44);
+    background: rgba(244, 68, 68, 0.1);
   }
 </style>

@@ -36,10 +36,6 @@
   });
 
   const rawDisplayStartRow = $derived(Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN));
-  const displayStartRow = $derived.by(() => {
-    const maxDisplay = Math.max(0, Math.floor(Math.max(0, scrollHeight - HEADER_HEIGHT) / ROW_HEIGHT) - 1);
-    return Math.min(rawDisplayStartRow, maxDisplay);
-  });
 
   const rawDataStartRow = $derived.by(() => {
     if (!compressedScroll) {
@@ -59,6 +55,11 @@
   });
   const endRow = $derived(Math.min(totalRows, startRow + visibleRowCount));
   const rowCount = $derived(Math.max(0, endRow - startRow));
+
+  // displayStartRow must always equal startRow so the CSS translateY matches
+  // the data rows being rendered. Previously these diverged near the bottom,
+  // causing the last rows to be positioned off-screen and an infinite-scroll loop.
+  const displayStartRow = $derived(startRow);
 
   $effect(() => {
     gridStore.updateViewport(startRow, endRow);
