@@ -256,7 +256,7 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
       const fileName = path.basename(document.uri.fsPath);
 
       const duckWorkerUrl = panel.webview.asWebviewUri(
-        vscode.Uri.joinPath(this._context.extensionUri, 'webview-ui', 'dist', 'duckdb.worker.js'),
+        vscode.Uri.joinPath(this._context.extensionUri, 'webview-ui', 'dist', 'data.worker.js'),
       ).toString();
 
       const duckAsset = (file: string): string =>
@@ -1103,7 +1103,7 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
         vscode.Uri.joinPath(this._context.extensionUri, 'webview-ui', 'dist', file),
       ).toString() + `?v=${cb}`;
 
-    const duckWorkerUri = distUri('duckdb.worker.js');
+    const duckWorkerUri = distUri('data.worker.js');
 
     return /* html */ `<!DOCTYPE html>
 <html lang="en">

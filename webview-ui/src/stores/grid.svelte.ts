@@ -1,6 +1,6 @@
 import type { ColumnSchema, CellValue, FilterSpec, SortSpec, ColumnStats, SidecarData, EditOp } from '@shared/schema.js';
 import type { InitPayload, ChunkPayload, EditAckPayload, ColumnStatsPayload } from '@shared/messages.js';
-import type { DuckDbWorkerIn, DuckDbWorkerOut } from '../workers/duckdb.worker.js';
+import type { DuckDbWorkerIn, DuckDbWorkerOut } from '../workers/data.worker.js';
 import { CHUNK_SIZE, MAX_CHUNKS_IN_MEMORY } from '@shared/constants.js';
 import { applyFilter, compareValues } from '@shared/filterUtils.js';
 import { buildViewIndex, hasViewTransform, mapVisibleRow } from './csvView.js';
@@ -142,7 +142,7 @@ class GridStore {
 
   // Excel: keep a copy of the buffer so selectSheet() can re-load a different sheet.
   private _excelBuffer: ArrayBuffer | null = null;
-  private _lastDuckBundles: import('../workers/duckdb.worker.js').DuckDbBundleSet | null = null;
+  private _lastDuckBundles: import('../workers/data.worker.js').DuckDbBundleSet | null = null;
 
   // Column colors: colIndex → CSS color string
   colColors = $state<Map<number, string>>(new Map());
@@ -388,7 +388,7 @@ class GridStore {
   loadRawBinary(
     buffer: ArrayBuffer,
     fileType: 'parquet' | 'arrow' | 'json' | 'excel' | 'avro',
-    duckBundles: import('../workers/duckdb.worker.js').DuckDbBundleSet,
+    duckBundles: import('../workers/data.worker.js').DuckDbBundleSet,
     jsonFormat?: 'json' | 'ndjson',
   ): void {
     this.fileType = fileType;
@@ -421,7 +421,7 @@ class GridStore {
   loadRawBinaryParts(
     buffers: ArrayBuffer[],
     fileType: 'parquet' | 'arrow',
-    duckBundles: import('../workers/duckdb.worker.js').DuckDbBundleSet,
+    duckBundles: import('../workers/data.worker.js').DuckDbBundleSet,
   ): void {
     this.fileType = fileType;
     console.log('[GM] loadRawBinaryParts', fileType, buffers.length, 'parts');

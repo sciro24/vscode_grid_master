@@ -10,6 +10,7 @@ export const VIEW_TYPES = {
   PARQUET: 'gridMaster.parquetEditor',
   ARROW: 'gridMaster.arrowEditor',
   JSON: 'gridMaster.jsonEditor',
+  JSON_ARRAY: 'gridMaster.jsonArrayEditor',
   EXCEL: 'gridMaster.excelEditor',
   AVRO: 'gridMaster.avroEditor',
   SQLITE: 'gridMaster.sqliteEditor',

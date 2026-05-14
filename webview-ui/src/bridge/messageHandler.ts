@@ -349,9 +349,9 @@ function parseCsvInline(text: string, _totalBytes: number, delimiter: string = '
     const headers = raw[0];
     const allRows: CellValue[][] = raw.slice(1).map(row => row.map(coerceCell));
     const schema = inferSchema(headers, allRows.slice(0, TYPE_INFERENCE_SAMPLE_ROWS));
-    const delimiter = result.meta.delimiter ?? ',';
+    const detectedDelimiter = result.meta.delimiter ?? ',';
 
-    gridStore.receiveCsvData(schema, allRows, delimiter);
+    gridStore.receiveCsvData(schema, allRows, detectedDelimiter);
     uiStore.setLoading(false);
   } catch (err) {
     uiStore.setError(String(err));

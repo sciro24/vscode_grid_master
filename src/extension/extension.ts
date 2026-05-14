@@ -11,6 +11,7 @@ const FILE_ASSOCIATIONS: Record<string, string> = {
   '*.feather': VIEW_TYPES.ARROW,
   '*.jsonl':   VIEW_TYPES.JSON,
   '*.ndjson':  VIEW_TYPES.JSON,
+  '*.json':    VIEW_TYPES.JSON_ARRAY,
   '*.xlsx':    VIEW_TYPES.EXCEL,
   '*.xlsb':    VIEW_TYPES.EXCEL,
   '*.xls':     VIEW_TYPES.EXCEL,
@@ -28,6 +29,7 @@ export function activate(context: vscode.ExtensionContext): void {
     GridEditorProvider.register(context, VIEW_TYPES.PARQUET),
     GridEditorProvider.register(context, VIEW_TYPES.ARROW),
     GridEditorProvider.register(context, VIEW_TYPES.JSON),
+    GridEditorProvider.register(context, VIEW_TYPES.JSON_ARRAY),
     GridEditorProvider.register(context, VIEW_TYPES.EXCEL),
     GridEditorProvider.register(context, VIEW_TYPES.AVRO),
     GridEditorProvider.register(context, VIEW_TYPES.SQLITE),
@@ -53,8 +55,9 @@ export function activate(context: vscode.ExtensionContext): void {
       const viewType =
         ext === 'parquet' || ext === 'parq'               ? VIEW_TYPES.PARQUET :
         ext === 'arrow'   || ext === 'feather'             ? VIEW_TYPES.ARROW :
-        ext === 'json'    || ext === 'jsonl' || ext === 'ndjson' ? VIEW_TYPES.JSON :
-        ext === 'xlsx'    || ext === 'xlsb' || ext === 'xls' || ext === 'xlsm' ? VIEW_TYPES.EXCEL :
+        ext === 'json'                                     ? VIEW_TYPES.JSON_ARRAY :
+        ext === 'jsonl' || ext === 'ndjson'                ? VIEW_TYPES.JSON :
+        ext === 'xlsx'    || ext === 'xlsb' || ext === 'xls' || ext === 'xlsm' || ext === 'ods' ? VIEW_TYPES.EXCEL :
         ext === 'avro'                                     ? VIEW_TYPES.AVRO :
         ext === 'db'      || ext === 'sqlite' || ext === 'sqlite3' ? VIEW_TYPES.SQLITE :
         ext === 'orc'                                      ? VIEW_TYPES.ORC :

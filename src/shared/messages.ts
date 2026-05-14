@@ -26,7 +26,7 @@ export interface InitPayload {
   schema: ColumnSchema[];
   firstChunk: DataChunk;
   sidecar?: import('./schema.js').SidecarData;
-  duckWorkerUrl?: string;     // webview-safe URL for duckdb.worker.js (Parquet/Arrow only)
+  duckWorkerUrl?: string;     // webview-safe URL for data.worker.js (Parquet/Arrow only)
 }
 
 export interface ChunkPayload {

@@ -36,7 +36,7 @@ function copyWorkerAssets(): Plugin {
 
 // Two-pass build:
 //   GM_BUILD=worker  → bundle the DuckDB worker into a single self-contained
-//                      file (duckdb.worker.js) with all deps inlined.
+//                      file (data.worker.js) with all deps inlined.
 //   GM_BUILD=main    → build the Svelte app (default).
 //
 // The worker MUST be self-contained because it's loaded via a same-origin
@@ -51,11 +51,11 @@ export default defineConfig(() => {
         outDir: 'dist',
         emptyOutDir: false,
         lib: {
-          entry: path.resolve(__dirname, 'src/workers/duckdb.worker.ts'),
+          entry: path.resolve(__dirname, 'src/workers/data.worker.ts'),
           // IIFE — classic worker, loaded via blob+importScripts pattern.
           formats: ['iife'],
           name: 'GridMasterWorker',
-          fileName: () => 'duckdb.worker.js',
+          fileName: () => 'data.worker.js',
         },
         rollupOptions: {
           output: {

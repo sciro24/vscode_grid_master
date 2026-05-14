@@ -99,6 +99,16 @@
         "priority": "default"
       },
       {
+        "viewType": "gridMaster.jsonArrayEditor",
+        "displayName": "Grid Master",
+        "selector": [
+          {
+            "filenamePattern": "*.json"
+          }
+        ],
+        "priority": "option"
+      },
+      {
         "viewType": "gridMaster.excelEditor",
         "displayName": "Grid Master",
         "selector": [
