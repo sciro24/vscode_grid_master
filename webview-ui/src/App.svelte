@@ -74,7 +74,7 @@
     {:else}
       <div class="empty-state">
         <span class="empty-icon">⊞</span>
-        <p>Open a CSV, TSV, Parquet, Arrow, JSON or JSONL file to get started.</p>
+        <p>Open a CSV, Parquet, Excel, JSON, SQLite, Avro or ORC file to get started.</p>
       </div>
     {/if}
   </div>

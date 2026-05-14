@@ -55,7 +55,7 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
       detectedType === 'parquet' || detectedType === 'parq'   ? 'parquet' :
       detectedType === 'arrow'   || detectedType === 'feather' ? 'arrow' :
       detectedType === 'json'    || detectedType === 'jsonl' || detectedType === 'ndjson' ? 'json' :
-      detectedType === 'xlsx'    || detectedType === 'xlsb' || detectedType === 'xls' || detectedType === 'xlsm' ? 'excel' :
+      detectedType === 'xlsx'    || detectedType === 'xlsb' || detectedType === 'xls' || detectedType === 'xlsm' || detectedType === 'ods' ? 'excel' :
       detectedType === 'avro'    ? 'avro' :
       detectedType === 'db'      || detectedType === 'sqlite' || detectedType === 'sqlite3' ? 'sqlite' :
       detectedType === 'orc'     ? 'orc' :

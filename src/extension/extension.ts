@@ -16,6 +16,7 @@ const FILE_ASSOCIATIONS: Record<string, string> = {
   '*.xlsb':    VIEW_TYPES.EXCEL,
   '*.xls':     VIEW_TYPES.EXCEL,
   '*.xlsm':    VIEW_TYPES.EXCEL,
+  '*.ods':     VIEW_TYPES.EXCEL,
   '*.avro':    VIEW_TYPES.AVRO,
   '*.db':      VIEW_TYPES.SQLITE,
   '*.sqlite':  VIEW_TYPES.SQLITE,
