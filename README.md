@@ -72,7 +72,7 @@
 | Apache Arrow / Feather | `.arrow` `.feather` | Direct Arrow IPC decoding |
 | JSON | `.json` | Right-click → Open with Grid Master |
 | Newline-delimited JSON | `.jsonl` `.ndjson` | Opens as default editor |
-| Excel workbooks | `.xlsx` `.xlsb` `.xls` `.xlsm` | First sheet loaded via SheetJS |
+| Excel workbooks | `.xlsx` `.xlsb` `.xls` `.xlsm` `.ods` | First sheet loaded via SheetJS |
 | Apache Avro | `.avro` | Decoded on extension host via avsc |
 | SQLite | `.db` `.sqlite` `.sqlite3` | Multi-table support with quick-pick |
 | Apache ORC | `.orc` | Requires Python 3 + `pip3 install pyorc` |
@@ -149,7 +149,7 @@
 ## Getting started
 
 1. **Install** Grid Master from the VS Marketplace or Open VSX.
-2. **Open any supported file** — Grid Master activates automatically for `.csv`, `.tsv`, `.parquet`, `.arrow`, `.feather`, `.jsonl`, `.ndjson`, `.xlsx`, `.xlsb`, `.xls`, `.xlsm`, `.avro`, `.db`, `.sqlite`, `.sqlite3`, `.orc`.
+2. **Open any supported file** — Grid Master activates automatically for `.csv`, `.tsv`, `.parquet`, `.arrow`, `.feather`, `.jsonl`, `.ndjson`, `.xlsx`, `.xlsb`, `.xls`, `.xlsm`, `.ods`, `.avro`, `.db`, `.sqlite`, `.sqlite3`, `.orc`.
 3. **JSON files** (`.json`) are not set as default to avoid overriding the built-in editor. Right-click in the Explorer and choose **Open with Grid Master**.
 4. **ORC files** require Python 3 with pyorc: `pip3 install pyorc`.
 5. **Partitioned datasets** — right-click the folder in the Explorer and choose **Open with Grid Master**, or just open any part-file and accept the popup.

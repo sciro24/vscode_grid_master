@@ -1,7 +1,7 @@
 """Generate sample data files for testing Grid Master.
 
 Run: python3 samples/generate.py
-Requires: pip3 install pandas pyarrow openpyxl fastavro pyorc
+Requires: pip3 install pandas pyarrow openpyxl fastavro pyorc odfpy
 """
 import json
 import random
@@ -79,6 +79,10 @@ print(f"wrote {OUT / 'flights.xlsx'} ({len(df)} rows)")
 # content regardless of extension. SheetJS (used by the extension) reads it correctly.
 df.to_excel(OUT / "flights.xlsb", index=False, engine="openpyxl")
 print(f"wrote {OUT / 'flights.xlsb'} (xlsx content, .xlsb extension for format testing)")
+
+# ODS (OpenDocument)
+df.to_excel(OUT / "flights.ods", index=False, engine="odf")
+print(f"wrote {OUT / 'flights.ods'} ({len(df)} rows)")
 
 # Avro
 avro_schema = {

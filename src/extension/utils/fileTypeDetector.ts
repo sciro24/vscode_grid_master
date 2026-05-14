@@ -18,6 +18,7 @@ export function detectFileType(uri: { fsPath: string }): SupportedFileType {
     case 'xlsb':
     case 'xls':
     case 'xlsm':
+    case 'ods':
       return 'xlsx';
     case 'avro':
       return 'avro';

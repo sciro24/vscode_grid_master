@@ -6,7 +6,7 @@ import { gridStore } from '../stores/grid.svelte.js';
 import { uiStore } from '../stores/ui.svelte.js';
 import { postMessage } from './vscode.js';
 
-type RawCsvMessage    = { type: '__RAW_CSV__';    payload: { text: string; totalBytes: number } };
+type RawCsvMessage    = { type: '__RAW_CSV__';    payload: { text: string; totalBytes: number; delimiter?: string } };
 type RawCsvBatchMessage = { type: '__RAW_CSV_BATCH__'; payload: {
   schema?: ColumnSchema[];
   delimiter?: string;
@@ -74,7 +74,7 @@ export function setupMessageHandler(): () => void {
         break;
 
       case '__RAW_CSV__':
-        parseCsvInline(msg.payload.text, msg.payload.totalBytes);
+        parseCsvInline(msg.payload.text, msg.payload.totalBytes, msg.payload.delimiter);
         break;
 
       case '__RAW_CSV_BATCH__':
@@ -327,10 +327,10 @@ function concatBase64Chunks(parts: string[]): ArrayBuffer {
 
 // ── Inline CSV parsing (synchronous, main thread, no Worker) ──────────────────
 
-function parseCsvInline(text: string, _totalBytes: number): void {
+function parseCsvInline(text: string, _totalBytes: number, delimiter: string = ''): void {
   try {
     const result = Papa.parse<string[]>(text, {
-      delimiter: '',
+      delimiter: delimiter,
       skipEmptyLines: true,
       header: false,
     });

@@ -301,6 +301,14 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
       }
 
       if (document.fileType === 'csv') {
+        const config = vscode.workspace.getConfiguration('gridMaster');
+        const autoDetect = config.get<boolean>('csvDelimiterAutoDetect', true);
+        let configuredDelimiter = '';
+        if (!autoDetect) {
+          const ext = path.extname(document.uri.fsPath).toLowerCase();
+          configuredDelimiter = ext === '.tsv' ? '\t' : config.get<string>('csvDelimiter', ',');
+        }
+
         // Files large enough that a single UTF-8 decoded string would exceed
         // V8's ~512 MB string limit (0x1fffffe8) need to be parsed host-side
         // via a Node read stream instead of shipped as one giant text payload.
@@ -343,7 +351,7 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
             },
           });
           send({ type: 'LOADING', payload: { active: true, message: previewOnly ? 'Loading preview…' : 'Parsing large CSV…' } });
-          await this._streamParseLargeCsv(document.uri, panel, send, previewOnly ? PREVIEW_ROW_LIMIT : undefined);
+          await this._streamParseLargeCsv(document.uri, panel, send, configuredDelimiter, previewOnly ? PREVIEW_ROW_LIMIT : undefined);
           send({ type: 'LOADING', payload: { active: false } });
         } else {
           const raw = await GridEditorProvider._fileReader.readAll(document.uri);
@@ -362,7 +370,7 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
             },
           });
 
-          panel.webview.postMessage({ type: '__RAW_CSV__', payload: { text, totalBytes } });
+          panel.webview.postMessage({ type: '__RAW_CSV__', payload: { text, totalBytes, delimiter: configuredDelimiter } });
           // LOADING:false is sent by the webview after it finishes parsing CSV inline.
         }
       } else if (document.fileType === 'json') {
@@ -537,6 +545,7 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
     uri: vscode.Uri,
     panel: vscode.WebviewPanel,
     send: (m: HostMessage) => void,
+    configuredDelimiter: string,
     rowLimit?: number,
   ): Promise<void> {
     // Stream-parse the file row-by-row, batching parsed rows into small
@@ -608,7 +617,7 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
 
       const stream = fs.createReadStream(uri.fsPath, { encoding: 'utf8' });
       Papa.parse<string[]>(stream as unknown as NodeJS.ReadableStream, {
-        delimiter: '',
+        delimiter: configuredDelimiter,
         skipEmptyLines: true,
         header: false,
         step: (results, parser) => {

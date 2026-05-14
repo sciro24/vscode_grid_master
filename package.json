@@ -113,6 +113,9 @@
           },
           {
             "filenamePattern": "*.xlsm"
+          },
+          {
+            "filenamePattern": "*.ods"
           }
         ],
         "priority": "default"
@@ -190,7 +193,7 @@
       "explorer/context": [
         {
           "command": "gridMaster.openWith",
-          "when": "!explorerResourceIsFolder && resourceFilename =~ /\\.(csv|tsv|parquet|parq|arrow|feather|json|jsonl|ndjson|xlsx|xlsb|xls|xlsm|avro|db|sqlite|sqlite3|orc)$/i",
+          "when": "!explorerResourceIsFolder && resourceFilename =~ /\\.(csv|tsv|parquet|parq|arrow|feather|json|jsonl|ndjson|xlsx|xlsb|xls|xlsm|ods|avro|db|sqlite|sqlite3|orc)$/i",
           "group": "navigation@10"
         },
         {
@@ -202,7 +205,7 @@
       "editor/title/context": [
         {
           "command": "gridMaster.openWith",
-          "when": "resourceExtname =~ /\\.(csv|tsv|parquet|parq|arrow|feather|json|jsonl|ndjson|xlsx|xlsb|xls|xlsm|avro|db|sqlite|sqlite3|orc)$/i",
+          "when": "resourceExtname =~ /\\.(csv|tsv|parquet|parq|arrow|feather|json|jsonl|ndjson|xlsx|xlsb|xls|xlsm|ods|avro|db|sqlite|sqlite3|orc)$/i",
           "group": "navigation@10"
         }
       ]
