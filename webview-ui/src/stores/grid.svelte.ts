@@ -102,6 +102,11 @@ class GridStore {
 
   // Auto-fitted column widths, keyed by column name. Computed once after data load.
   private _autoWidths = new Map<string, number>();
+  // Guards the one-shot auto-width pass for worker-backed formats (JSON/Parquet/
+  // Arrow/Excel), which never populate _csvAllRows and so miss the CSV/raw-rows
+  // auto-width path. Reset on every worker READY so a new dataset (or Excel sheet
+  // switch) re-fits its columns.
+  private _autoWidthsDone = false;
 
   // Viewport
   visibleStartRow = $state(0);
@@ -1523,6 +1528,7 @@ class GridStore {
         this.schema = msg.payload.schema;
         this.totalRows = msg.payload.totalRows;
         this.filteredRows = msg.payload.totalRows;
+        this._autoWidthsDone = false;
         if (msg.payload.availableSheets) {
           this.availableSheets = msg.payload.availableSheets;
           this.selectedSheet = msg.payload.selectedSheet ?? msg.payload.availableSheets[0] ?? '';
@@ -1534,6 +1540,14 @@ class GridStore {
 
       case 'CHUNK': {
         const { requestId, rows, startRow, filteredTotal } = msg.payload;
+        // Worker-backed formats (JSON/Parquet/Arrow/Excel) never populate
+        // _csvAllRows, so the CSV/raw-rows auto-width path never runs for them.
+        // Fit widths once from the first chunk (natural order, no filter/sort on
+        // initial load) so columns size to their content like CSV does.
+        if (startRow === 0 && !this._autoWidthsDone && rows.length > 0 && this.schema.length > 0) {
+          this._computeAutoWidths(this.schema, rows);
+          this._autoWidthsDone = true;
+        }
         this._storeChunk(startRow, rows, requestId);
         this.filteredRows = filteredTotal;
         const resolve = this._pendingRequests.get(requestId);

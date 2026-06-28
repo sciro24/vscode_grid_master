@@ -259,6 +259,19 @@
   const selectedRange = $derived(gridStore.selectedRange);
   const frozenCols = $derived(gridStore.frozenCols);
 
+  // Visible position of the column that stretches to absorb any leftover
+  // horizontal space, so the grid spans the full pane with no blank
+  // "phantom column" on the right. We grow the last visible column unless it's
+  // frozen (sticky positioning + flex-grow don't mix cleanly). When the columns
+  // already overflow the pane, flex-grow has nothing to add and the column keeps
+  // its natural width (horizontal scroll kicks in as before).
+  const fillColPos = $derived.by(() => {
+    const cols = gridStore.visibleSchema;
+    const last = cols.length - 1;
+    if (last < 0) return -1;
+    return frozenCols.has(cols[last].index) ? -1 : last;
+  });
+
   // Returns the sticky `left` offset (in px) for a frozen column at visual position `colPos`.
   // Row-number column is 56px + 1px border = 57px. Sums widths of all frozen cols before this one.
   function getFrozenLeft(col: import('@shared/schema.js').ColumnSchema, colPos: number): number {
@@ -465,6 +478,7 @@
             class="header-cell"
             class:header-cell-selected={colSel}
             class:col-frozen={isFrozen}
+            class:col-fill={colPos === fillColPos}
             class:drag-over={dragOverPos === colPos && dragFromPos !== colPos}
             role="columnheader"
             tabindex="-1"
@@ -519,6 +533,7 @@
                 <!-- svelte-ignore a11y_autofocus -->
                 <input
                   class="cell-input"
+                  class:col-fill={colPos === fillColPos}
                   style="width: {colWidth(col.name, col.inferredType)}px"
                   bind:value={editValue}
                   onblur={commitEdit}
@@ -535,6 +550,7 @@
                   class:cell-cross={isCrossPivot(row, col.index)}
                   class:cell-in-range={isInRange(row, col.index)}
                   class:col-frozen={isFrozen}
+                  class:col-fill={colPos === fillColPos}
                   style="width: {colWidth(col.name, col.inferredType)}px; {colBgStyle(col.index)}{isFrozen ? ' left: ' + getFrozenLeft(col, colPos) + 'px;' : ''}"
                   onclick={(e) => onCellClick(e, row, col.index)}
                   ondblclick={() => startEdit(row, col.index)}
@@ -825,6 +841,17 @@
     font-size: inherit;
     outline: none;
     box-sizing: border-box;
+  }
+
+  /* The last visible column stretches to absorb leftover horizontal space so the
+     grid fills the pane with no blank phantom column on the right. The inline
+     `width` acts as the flex-basis and flex-shrink stays 0, so the column only
+     ever grows past its natural width — when columns overflow the pane there's
+     nothing to absorb and it keeps its set width (horizontal scroll as before). */
+  .header-cell.col-fill,
+  .cell.col-fill,
+  .cell-input.col-fill {
+    flex-grow: 1;
   }
 
   /* ── Coloured mode ──────────────────────────────────────────────────────
