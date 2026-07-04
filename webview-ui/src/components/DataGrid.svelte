@@ -24,6 +24,15 @@
   // Read cacheVersion so cell reads in the template re-evaluate when the cache mutates.
   const cacheTick = $derived(gridStore.cacheVersion);
 
+  // Visible-row index pinned to the top (null = none).
+  const frozenRowIdx = $derived(gridStore.frozenRow);
+  // Extra vertical space the pinned band occupies below the header. The band
+  // adds itself above the data instead of overlaying it, so the scrollable rows
+  // are pushed down by this amount and nothing is hidden behind the band.
+  const frozenBandHeight = $derived(
+    frozenRowIdx !== null && frozenRowIdx < totalRows ? ROW_HEIGHT : 0
+  );
+
   const visibleRowCount = $derived(Math.ceil(viewportHeight / ROW_HEIGHT) + OVERSCAN * 2);
   const maxDataStart = $derived(Math.max(0, totalRows - visibleRowCount));
   const maxScrollTop = $derived(Math.max(1, scrollHeight - viewportHeight));
@@ -486,7 +495,7 @@
 
 <div class="grid-root" class:is-resizing={resizing !== null} class:is-coloured={colouredMode}>
   <div class="grid-scroller" bind:this={scrollerEl} onscroll={onScroll}>
-    <div class="grid-sizer" style="height: {virtualTotalHeight + HEADER_HEIGHT}px;">
+    <div class="grid-sizer" style="height: {virtualTotalHeight + HEADER_HEIGHT + frozenBandHeight}px;">
 
       <!-- Sticky header -->
       <div class="grid-header" style="height: {HEADER_HEIGHT}px;">
@@ -530,8 +539,34 @@
         {/each}
       </div>
 
+      <!-- Frozen row — pinned below the header, always visible while scrolling -->
+      {#if frozenRowIdx !== null && frozenRowIdx < totalRows}
+        <div class="grid-frozen-row" style="top: {HEADER_HEIGHT}px; height: {ROW_HEIGHT}px;">
+          <div
+            class="row-num-cell row-num-frozen frozen-row-num"
+            onclick={() => onRowNumClick(frozenRowIdx)}
+            oncontextmenu={(e) => onRowContextMenu(e, frozenRowIdx)}
+            title="Frozen row {frozenRowIdx + 1} — right-click to unfreeze"
+            role="button"
+            tabindex="-1"
+          >{frozenRowIdx + 1}</div>
+          {#each gridStore.visibleSchema as col, colPos (col.index)}
+            {@const val = (cacheTick, gridStore.getCell(frozenRowIdx, col.index))}
+            {@const isFrozen = frozenCols.has(col.index)}
+            <div
+              class="cell"
+              class:cell-null={isNull(val)}
+              class:cell-number={col.inferredType === 'number'}
+              class:col-frozen={isFrozen}
+              class:col-fill={colPos === fillColPos}
+              style="width: {colWidth(col.name, col.inferredType)}px; {colBgStyle(col.index)}{isFrozen ? ' left: ' + getFrozenLeft(col, colPos) + 'px;' : ''}"
+            >{isNull(val) ? '∅' : formatCell(val)}</div>
+          {/each}
+        </div>
+      {/if}
+
       <!-- Virtualized rows -->
-      <div class="grid-rows" style="transform: translateY({HEADER_HEIGHT + displayOffsetPx}px);">
+      <div class="grid-rows" style="transform: translateY({HEADER_HEIGHT + frozenBandHeight + displayOffsetPx}px);">
         {#each Array(rowCount) as _, i}
           {@const row = startRow + i}
           {@const rowSel = isRowSelected(row)}
@@ -649,6 +684,18 @@
     background: var(--gm-header-bg, var(--vscode-editorWidget-background));
     border-bottom: 1px solid var(--gm-border, var(--vscode-panel-border));
   }
+
+  /* Frozen row — sticky band pinned directly under the header */
+  .grid-frozen-row {
+    display: flex;
+    position: sticky;
+    z-index: 5;
+    background: var(--gm-header-bg, var(--vscode-editorWidget-background));
+    border-bottom: 2px solid var(--vscode-focusBorder, #007acc);
+    box-sizing: border-box;
+  }
+  .grid-frozen-row .row-num-frozen { z-index: 2; cursor: pointer; }
+  .grid-frozen-row .cell.col-frozen { z-index: 1; }
 
   .header-cell {
     position: relative;

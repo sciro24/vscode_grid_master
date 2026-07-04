@@ -32,6 +32,9 @@
     <button class="menu-item" onclick={() => act(() => gridStore.copyRowToClipboard(row))}>
       <span class="menu-icon">⎘</span> Copy row
     </button>
+    <button class="menu-item" onclick={() => act(() => gridStore.toggleFreezeRow(row))}>
+      <span class="menu-icon">📌</span> {gridStore.frozenRow === row ? 'Unfreeze row' : 'Freeze row'}
+    </button>
   </div>
 
   {#if isCsv}

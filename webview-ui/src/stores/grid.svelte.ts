@@ -133,6 +133,9 @@ class GridStore {
   // Set of schema column indices that are frozen (sticky left).
   frozenCols = $state<Set<number>>(new Set());
 
+  // Visible-row index pinned to the top while scrolling (sticky). null = none.
+  frozenRow = $state<number | null>(null);
+
   // Visual column order: array of schema indices. null = natural (schema) order.
   columnOrder = $state<number[] | null>(null);
 
@@ -739,6 +742,13 @@ class GridStore {
 
   // ── Filters & Sort ────────────────────────────────────────────────────────
 
+  // frozenRow is a visible-row index; any filter/sort/search change remaps which
+  // data row sits at that index, so the pin would silently point at a different
+  // row. Clear it whenever the view is rebuilt.
+  private _clearFrozenRowOnViewChange(): void {
+    if (this.frozenRow !== null) this.frozenRow = null;
+  }
+
   setFilter(filter: FilterSpec): void {
     const idx = this.filters.findIndex(f => f.colIndex === filter.colIndex);
     if (idx >= 0) {
@@ -746,24 +756,28 @@ class GridStore {
     } else {
       this.filters = [...this.filters, filter];
     }
+    this._clearFrozenRowOnViewChange();
     this._invalidateCache();
     this.persistSidecar();
   }
 
   removeFilter(colIndex: number): void {
     this.filters = this.filters.filter(f => f.colIndex !== colIndex);
+    this._clearFrozenRowOnViewChange();
     this._invalidateCache();
     this.persistSidecar();
   }
 
   clearFilters(): void {
     this.filters = [];
+    this._clearFrozenRowOnViewChange();
     this._invalidateCache();
     this.persistSidecar();
   }
 
   setSort(sort: SortSpec | null): void {
     this.sort = sort;
+    this._clearFrozenRowOnViewChange();
     this._invalidateCache();
     this.persistSidecar();
   }
@@ -771,6 +785,7 @@ class GridStore {
   setGlobalSearch(query: string): void {
     // Volatile (per-session) search — not persisted.
     this.globalSearch = query;
+    this._clearFrozenRowOnViewChange();
     this._invalidateCache();
   }
 
@@ -1110,6 +1125,18 @@ class GridStore {
 
   unfreezeAllCols(): void {
     this.frozenCols = new Set();
+    this.persistSidecar();
+  }
+
+  // Pin a visible row to the top (or unpin if already frozen). Only one row can
+  // be frozen at a time — freezing a different row replaces the previous one.
+  toggleFreezeRow(row: number): void {
+    this.frozenRow = this.frozenRow === row ? null : row;
+    this.persistSidecar();
+  }
+
+  clearFrozenRow(): void {
+    this.frozenRow = null;
     this.persistSidecar();
   }
 
@@ -1629,6 +1656,11 @@ class GridStore {
         this.frozenCols = new Set(sidecar.frozenCols);
       }
 
+      // Frozen row
+      if (typeof sidecar.frozenRow === 'number') {
+        this.frozenRow = sidecar.frozenRow;
+      }
+
 
       // Edit history — restore commits and replay up to historyIndex.
       // Data (_csvAllRows) is already at its current state from the file; history
@@ -1686,6 +1718,7 @@ class GridStore {
       sort: sortName ? { column: sortName, direction: this.sort!.direction } : null,
       columnOrder: this.columnOrder ?? undefined,
       frozenCols: this.frozenCols.size > 0 ? [...this.frozenCols] : undefined,
+      frozenRow: this.frozenRow ?? undefined,
       selectedSheet: this.selectedSheet || undefined,
       ...(this._commits.length > 0 ? this._buildEditHistorySidecar() : {}),
     };

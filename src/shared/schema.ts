@@ -65,6 +65,8 @@ export interface SidecarData {
   columnOrder?: number[];
   /** Schema indices of individually frozen columns. Absent = none frozen. */
   frozenCols?: number[];
+  /** Visible-row index of the pinned/frozen row. Absent = no frozen row. */
+  frozenRow?: number;
   /** Last selected sheet name for Excel files. Absent = first sheet. */
   selectedSheet?: string;
   /** Committed edit history for undo/redo across sessions. Each entry is one commit (array of ops). */
