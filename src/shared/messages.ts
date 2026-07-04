@@ -105,10 +105,16 @@ export type WebviewMessage =
   | { type: 'EXPORT_CANCEL' }
   | { type: 'SAVE_SIDECAR';          payload: SaveSidecarPayload }
   | { type: 'UPDATE_DELIMITER';       payload: UpdateDelimiterPayload }
+  | { type: 'OPEN_EXTERNAL';          payload: OpenExternalPayload }
   | { type: 'LARGE_FILE_OPEN_CONFIRM' }
   | { type: 'LARGE_FILE_OPEN_PREVIEW' }
   | { type: 'LARGE_FILE_OPEN_CANCEL' }
   | { type: 'LARGE_FILE_STREAM_CANCEL' };
+
+export interface OpenExternalPayload {
+  /** URL to open in the user's default browser. Host validates the scheme. */
+  url: string;
+}
 
 export interface SaveDataPayload {
   /** Serialized text content the host should write to the document URI. */

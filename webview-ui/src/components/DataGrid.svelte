@@ -12,9 +12,12 @@
   const MIN_COL_WIDTH = 40;
   const MAX_SCROLLABLE_HEIGHT = 33_000_000;
 
+  const ROWNUM_WIDTH = 56;
+
   let scrollerEl: HTMLDivElement;
   let scrollTop = $state(0);
   let viewportHeight = $state(600);
+  let viewportWidth = $state(0);
   let scrollHeight = $state(0);
 
   const totalRows = $derived(gridStore.filteredRows);
@@ -103,6 +106,7 @@
   function onResize() {
     if (scrollerEl) {
       viewportHeight = scrollerEl.clientHeight;
+      viewportWidth = scrollerEl.clientWidth;
       scrollHeight = scrollerEl.scrollHeight;
     }
   }
@@ -110,6 +114,7 @@
   $effect(() => {
     if (scrollerEl) {
       viewportHeight = scrollerEl.clientHeight;
+      viewportWidth = scrollerEl.clientWidth;
       scrollHeight = scrollerEl.scrollHeight;
       const ro = new ResizeObserver(onResize);
       ro.observe(scrollerEl);
@@ -137,6 +142,67 @@
     return v === null || v === undefined;
   }
 
+  // Split a cell string into plain-text and URL segments so http(s) links can be
+  // rendered clickable. Only the URL token is a click target — not the whole
+  // cell — so a value may hold several whitespace-separated URLs.
+  const URL_RE = /(https?:\/\/[^\s]+)/g;
+  type CellPart = { text: string; url: boolean };
+  function linkParts(s: string): CellPart[] {
+    if (!s || s.indexOf('http') === -1) return [{ text: s, url: false }];
+    const parts: CellPart[] = [];
+    let last = 0;
+    let m: RegExpExecArray | null;
+    URL_RE.lastIndex = 0;
+    while ((m = URL_RE.exec(s)) !== null) {
+      if (m.index > last) parts.push({ text: s.slice(last, m.index), url: false });
+      // Trailing punctuation (quotes, commas, closing brackets) is not part of
+      // the URL — peel it off into a plain-text segment.
+      let raw = m[0];
+      const trail = raw.match(/[)\].,;:'"<>]+$/);
+      let tail = '';
+      if (trail) { tail = trail[0]; raw = raw.slice(0, raw.length - tail.length); }
+      parts.push({ text: raw, url: true });
+      if (tail) parts.push({ text: tail, url: false });
+      last = URL_RE.lastIndex;
+    }
+    if (last < s.length) parts.push({ text: s.slice(last), url: false });
+    return parts;
+  }
+
+  // Right-click context menu for an individual link.
+  let linkMenu = $state<{ url: string; x: number; y: number } | null>(null);
+
+  function onUrlClick(e: MouseEvent, url: string) {
+    // Never let the anchor navigate the webview itself.
+    e.preventDefault();
+    if (e.ctrlKey || e.metaKey) {
+      // Modifier-click opens externally; swallow so the cell isn't selected too.
+      e.stopPropagation();
+      postMessage({ type: 'OPEN_EXTERNAL', payload: { url } });
+    }
+    // Plain click: navigation prevented, event still bubbles → normal cell select
+    // (single click selects the cell, double click edits it — unchanged).
+  }
+
+  function onLinkContextMenu(e: MouseEvent, url: string) {
+    // Right-click a link → open its own menu instead of navigating/selecting.
+    e.preventDefault();
+    e.stopPropagation();
+    rowMenu = null;
+    colMenu = null;
+    linkMenu = { url, x: e.clientX, y: e.clientY };
+  }
+
+  function openLink(url: string) {
+    postMessage({ type: 'OPEN_EXTERNAL', payload: { url } });
+    linkMenu = null;
+  }
+
+  function copyLink(url: string) {
+    navigator.clipboard?.writeText(url).catch(() => {});
+    linkMenu = null;
+  }
+
   // ── Column resize ─────────────────────────────────────────────────────────
 
   let resizing = $state<{ colName: string; startX: number; startW: number } | null>(null);
@@ -161,6 +227,40 @@
 
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
+  }
+
+  // Excel-style "fit to content": double-clicking the resize handle sizes the
+  // column to its widest visible value (header included). Measured with a canvas
+  // using the grid's actual cell font so proportional fonts size correctly.
+  let _measureCanvas: HTMLCanvasElement | null = null;
+  function measureText(text: string, font: string): number {
+    if (!_measureCanvas) _measureCanvas = document.createElement('canvas');
+    const ctx = _measureCanvas.getContext('2d');
+    if (!ctx) return text.length * 7.2;
+    ctx.font = font;
+    return ctx.measureText(text).width;
+  }
+
+  function autoFitColumn(e: MouseEvent, col: { name: string; index: number; inferredType: string }) {
+    e.preventDefault();
+    e.stopPropagation();
+    const CELL_PAD = 20;   // 8px each side + slack
+    const MIN_W = MIN_COL_WIDTH;
+    const MAX_W = 800;
+    // Read the real cell font off a rendered cell so measurement matches display.
+    const sampleCell = scrollerEl?.querySelector('.cell') as HTMLElement | null;
+    const cs = sampleCell ? getComputedStyle(sampleCell) : null;
+    const cellFont = cs ? `${cs.fontSize} ${cs.fontFamily}` : '12px monospace';
+    // Header is a touch bolder/smaller; approximate with 600 weight at 11px.
+    const headerFont = cs ? `600 11px ${cs.fontFamily}` : '600 11px monospace';
+
+    let widest = measureText(col.name, headerFont);
+    for (const s of gridStore.getColumnStringsForFit(col.index)) {
+      const w = measureText(s, cellFont);
+      if (w > widest) widest = w;
+    }
+    const width = Math.max(MIN_W, Math.min(MAX_W, Math.ceil(widest) + CELL_PAD));
+    gridStore.setColumnWidth(col.name, width);
   }
 
   // ── Editing ───────────────────────────────────────────────────────────────
@@ -199,17 +299,58 @@
 
   // ── Column widths ─────────────────────────────────────────────────────────
 
-  function colWidth(name: string, type: string): number {
-    const stored = gridStore.colWidths.get(name);
-    if (stored) return stored;
-    const auto = gridStore.getAutoWidth(name);
-    if (auto) return auto;
+  function defaultWidth(type: string): number {
     switch (type) {
       case 'number':  return 110;
       case 'boolean': return 80;
       case 'date':    return 140;
       default:        return 160;
     }
+  }
+
+  // Raw intended width of a column, before any fill distribution: an explicit
+  // user/resize width wins, then the sampled auto width, then a type default.
+  function baseWidth(name: string, type: string): number {
+    const stored = gridStore.colWidths.get(name);
+    if (stored) return stored;
+    const auto = gridStore.getAutoWidth(name);
+    if (auto) return auto;
+    return defaultWidth(type);
+  }
+
+  // Display widths for every visible column. When the columns together are
+  // narrower than the pane (few-columns case), the leftover horizontal space is
+  // distributed proportionally across the columns that have NOT been manually
+  // resized, so the grid fills the view with sensible, coherent widths.
+  // Manually-resized columns keep their exact width; if every column is
+  // user-set the leftover is absorbed by a trailing spacer instead (see
+  // showFillSpacer) so a drag is never fought by auto-fill.
+  const colDisplayWidths = $derived.by(() => {
+    const cols = gridStore.visibleSchema;
+    const map = new Map<string, number>();
+    let sumAll = 0;
+    let sumAutoBase = 0;
+    const autoNames: string[] = [];
+    for (const c of cols) {
+      const b = baseWidth(c.name, c.inferredType);
+      map.set(c.name, b);
+      sumAll += b;
+      if (!gridStore.colWidths.has(c.name)) { sumAutoBase += b; autoNames.push(c.name); }
+    }
+    const avail = viewportWidth - ROWNUM_WIDTH - 1;
+    const leftover = avail - sumAll;
+    // Only grow to fill when there's slack AND at least one auto column to grow.
+    if (leftover > 0 && autoNames.length > 0 && sumAutoBase > 0) {
+      for (const name of autoNames) {
+        const b = map.get(name)!;
+        map.set(name, b + (b / sumAutoBase) * leftover);
+      }
+    }
+    return map;
+  });
+
+  function colWidth(name: string, type: string): number {
+    return colDisplayWidths.get(name) ?? baseWidth(name, type);
   }
 
   // ── Sort ──────────────────────────────────────────────────────────────────
@@ -288,17 +429,23 @@
   const selectedRange = $derived(gridStore.selectedRange);
   const frozenCols = $derived(gridStore.frozenCols);
 
-  // Visible position of the column that stretches to absorb any leftover
-  // horizontal space, so the grid spans the full pane with no blank
-  // "phantom column" on the right. We grow the last visible column unless it's
-  // frozen (sticky positioning + flex-grow don't mix cleanly). When the columns
-  // already overflow the pane, flex-grow has nothing to add and the column keeps
-  // its natural width (horizontal scroll kicks in as before).
-  const fillColPos = $derived.by(() => {
+  // Trailing filler for the leftover horizontal space. colDisplayWidths already
+  // grows the un-resized columns to fill the pane, so a spacer is only needed in
+  // the corner case where EVERY column has been manually resized (nothing left
+  // to auto-grow) yet they still don't span the pane — then the spacer absorbs
+  // the gap instead of a blank phantom column. Skipped when the last column is
+  // frozen (sticky + flex-grow don't mix cleanly).
+  const showFillSpacer = $derived.by(() => {
     const cols = gridStore.visibleSchema;
     const last = cols.length - 1;
-    if (last < 0) return -1;
-    return frozenCols.has(cols[last].index) ? -1 : last;
+    if (last < 0) return false;
+    if (frozenCols.has(cols[last].index)) return false;
+    // Auto columns (if any) already absorbed the slack via colDisplayWidths.
+    const allUserSet = cols.every(c => gridStore.colWidths.has(c.name));
+    if (!allUserSet) return false;
+    let sum = 0;
+    for (const c of cols) sum += colWidth(c.name, c.inferredType);
+    return sum < viewportWidth - ROWNUM_WIDTH - 1;
   });
 
   // Returns the sticky `left` offset (in px) for a frozen column at visual position `colPos`.
@@ -491,7 +638,9 @@
   }
 </script>
 
-<svelte:window onkeydown={onKeyDown} />
+<svelte:window onkeydown={onKeyDown} onclick={() => { if (linkMenu) linkMenu = null; }} />
+
+{#snippet cellBody(val: CellValue)}{#if isNull(val)}∅{:else}{#each linkParts(formatCell(val)) as p}{#if p.url}<a class="cell-link" href={p.text} rel="noreferrer" onclick={(e) => onUrlClick(e, p.text)} oncontextmenu={(e) => onLinkContextMenu(e, p.text)} title="Ctrl/Cmd-click or right-click to open">{p.text}</a>{:else}{p.text}{/if}{/each}{/if}{/snippet}
 
 <div class="grid-root" class:is-resizing={resizing !== null} class:is-coloured={colouredMode}>
   <div class="grid-scroller" bind:this={scrollerEl} onscroll={onScroll}>
@@ -507,7 +656,6 @@
             class="header-cell"
             class:header-cell-selected={colSel}
             class:col-frozen={isFrozen}
-            class:col-fill={colPos === fillColPos}
             class:drag-over={dragOverPos === colPos && dragFromPos !== colPos}
             role="columnheader"
             tabindex="-1"
@@ -531,12 +679,15 @@
             <div
               class="resize-handle"
               onmousedown={(e) => startResize(e, col.name, col.inferredType)}
+              ondblclick={(e) => autoFitColumn(e, col)}
               role="separator"
               tabindex="-1"
-              aria-label="Resize column"
+              aria-label="Resize column — double-click to fit content"
+              title="Drag to resize — double-click to fit content"
             ></div>
           </div>
         {/each}
+        {#if showFillSpacer}<div class="fill-spacer"></div>{/if}
       </div>
 
       <!-- Frozen row — pinned below the header, always visible while scrolling -->
@@ -558,10 +709,10 @@
               class:cell-null={isNull(val)}
               class:cell-number={col.inferredType === 'number'}
               class:col-frozen={isFrozen}
-              class:col-fill={colPos === fillColPos}
               style="width: {colWidth(col.name, col.inferredType)}px; {colBgStyle(col.index)}{isFrozen ? ' left: ' + getFrozenLeft(col, colPos) + 'px;' : ''}"
-            >{isNull(val) ? '∅' : formatCell(val)}</div>
+            >{@render cellBody(val)}</div>
           {/each}
+          {#if showFillSpacer}<div class="fill-spacer"></div>{/if}
         </div>
       {/if}
 
@@ -588,7 +739,6 @@
                 <!-- svelte-ignore a11y_autofocus -->
                 <input
                   class="cell-input"
-                  class:col-fill={colPos === fillColPos}
                   style="width: {colWidth(col.name, col.inferredType)}px"
                   bind:value={editValue}
                   onblur={commitEdit}
@@ -605,7 +755,6 @@
                   class:cell-cross={isCrossPivot(row, col.index)}
                   class:cell-in-range={isInRange(row, col.index)}
                   class:col-frozen={isFrozen}
-                  class:col-fill={colPos === fillColPos}
                   style="width: {colWidth(col.name, col.inferredType)}px; {colBgStyle(col.index)}{isFrozen ? ' left: ' + getFrozenLeft(col, colPos) + 'px;' : ''}"
                   onclick={(e) => onCellClick(e, row, col.index)}
                   ondblclick={() => startEdit(row, col.index)}
@@ -613,10 +762,11 @@
                   role="button"
                   tabindex="-1"
                 >
-                  {isNull(val) ? '∅' : formatCell(val)}
+                  {@render cellBody(val)}
                 </div>
               {/if}
             {/each}
+            {#if showFillSpacer}<div class="fill-spacer"></div>{/if}
           </div>
         {/each}
       </div>
@@ -644,6 +794,18 @@
 
 {#if statsCol !== null}
   <ColumnStatsPanel colIndex={statsCol} onClose={() => statsCol = null} />
+{/if}
+
+{#if linkMenu}
+  <div class="link-menu" style="left: {linkMenu.x}px; top: {linkMenu.y}px;" role="menu" tabindex="-1">
+    <div class="link-menu-url" title={linkMenu.url}>{linkMenu.url}</div>
+    <button class="link-menu-item" onclick={() => openLink(linkMenu!.url)}>
+      <span class="link-menu-icon">↗</span> Open link in browser
+    </button>
+    <button class="link-menu-item" onclick={() => copyLink(linkMenu!.url)}>
+      <span class="link-menu-icon">⎘</span> Copy link
+    </button>
+  </div>
 {/if}
 
 <style>
@@ -781,6 +943,65 @@
     border-bottom: 1px solid var(--gm-border, var(--vscode-panel-border));
   }
 
+  .cell-link {
+    color: var(--vscode-textLink-foreground, #3794ff);
+    text-decoration: underline;
+    cursor: pointer;
+    /* Guarantees a visible gap when a cell holds several URLs back-to-back,
+       regardless of whether the source text has whitespace between them. */
+    margin-right: 4px;
+  }
+  .cell-link:hover {
+    color: var(--vscode-textLink-activeForeground, var(--vscode-textLink-foreground, #3794ff));
+  }
+
+  .link-menu {
+    position: fixed;
+    z-index: 1000;
+    background: var(--gm-menu-bg, var(--vscode-menu-background, var(--vscode-editorWidget-background)));
+    border: 1px solid var(--gm-border, var(--vscode-menu-border, var(--vscode-panel-border)));
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+    min-width: 200px;
+    max-width: 360px;
+    overflow: hidden;
+    font-size: 12px;
+    padding: 4px 0;
+  }
+  .link-menu-url {
+    padding: 4px 12px 6px;
+    color: var(--gm-fg-muted, var(--vscode-descriptionForeground));
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    border-bottom: 1px solid var(--gm-border, var(--vscode-panel-border));
+    margin-bottom: 2px;
+  }
+  .link-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 5px 12px;
+    background: none;
+    border: none;
+    color: var(--gm-fg, var(--vscode-menu-foreground, inherit));
+    font-size: 12px;
+    cursor: pointer;
+    text-align: left;
+  }
+  .link-menu-item:hover {
+    background: var(--gm-hover-bg, var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground)));
+    color: var(--vscode-menu-selectionForeground, inherit);
+  }
+  .link-menu-icon {
+    width: 14px;
+    text-align: center;
+    color: var(--gm-fg-muted, var(--vscode-descriptionForeground));
+    font-size: 11px;
+  }
+
   .grid-row:hover > .cell {
     filter: brightness(0.95);
   }
@@ -910,15 +1131,13 @@
     box-sizing: border-box;
   }
 
-  /* The last visible column stretches to absorb leftover horizontal space so the
-     grid fills the pane with no blank phantom column on the right. The inline
-     `width` acts as the flex-basis and flex-shrink stays 0, so the column only
-     ever grows past its natural width — when columns overflow the pane there's
-     nothing to absorb and it keeps its set width (horizontal scroll as before). */
-  .header-cell.col-fill,
-  .cell.col-fill,
-  .cell-input.col-fill {
-    flex-grow: 1;
+  /* Trailing filler that absorbs leftover horizontal space so the grid spans
+     the full pane with no blank phantom column on the right. A dedicated
+     element (not the last real column) so every column keeps the width the
+     user set via resize. */
+  .fill-spacer {
+    flex: 1 0 0;
+    min-width: 0;
   }
 
   /* ── Coloured mode ──────────────────────────────────────────────────────

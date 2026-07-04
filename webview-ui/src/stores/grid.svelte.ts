@@ -345,6 +345,31 @@ class GridStore {
     return this._autoWidths.get(colName);
   }
 
+  // Collect rendered string values of a column from whatever data is currently
+  // available, so a caller can measure them for an Excel-style "fit to content"
+  // resize. In-memory tables read straight from _csvAllRows; worker-backed
+  // formats read from the loaded chunk cache (only what's been fetched).
+  getColumnStringsForFit(colIndex: number, limit = 5000): string[] {
+    const out: string[] = [];
+    const push = (v: CellValue) => {
+      if (v === null || v === undefined) return;
+      out.push(String(v));
+    };
+    if (this._isInMemoryTable()) {
+      const rows = this._csvAllRows;
+      const n = Math.min(rows.length, limit);
+      for (let i = 0; i < n; i++) push(rows[i]?.[colIndex]);
+    } else {
+      for (const chunk of this._cache.values()) {
+        for (const row of chunk) {
+          push(row?.[colIndex]);
+          if (out.length >= limit) return out;
+        }
+      }
+    }
+    return out;
+  }
+
   private _isInMemoryTable(): boolean {
     return this.fileType === 'csv' || this.fileType === 'sqlite' || this.fileType === 'avro' || this.fileType === 'orc';
   }

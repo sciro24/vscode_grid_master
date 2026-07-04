@@ -240,6 +240,20 @@ export class GridEditorProvider implements vscode.CustomEditorProvider<DocumentM
       case 'EXPORT_CANCEL':
         this._cancelExport(panel);
         break;
+
+      case 'OPEN_EXTERNAL': {
+        // Only open http/https links — never file:, vscode:, javascript:, etc.
+        let parsed: vscode.Uri | undefined;
+        try {
+          parsed = vscode.Uri.parse(msg.payload.url, true);
+        } catch {
+          parsed = undefined;
+        }
+        if (parsed && (parsed.scheme === 'https' || parsed.scheme === 'http')) {
+          await vscode.env.openExternal(parsed);
+        }
+        break;
+      }
     }
   }
 

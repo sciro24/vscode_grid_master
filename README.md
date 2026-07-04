@@ -101,7 +101,9 @@
 - **Range selection** — click a cell, then **shift-click** another to select a rectangle. **Ctrl/Cmd + C** copies the range as TSV (paste straight into Excel, Numbers or another spreadsheet).
 - **Keyboard navigation** — arrow keys, Tab, Home/End, PageUp/PageDown, **Enter** to start editing, **Escape** to cancel/clear; hold **Shift** while moving to extend the range.
 - **Freeze first column** — toolbar toggle keeps the first data column (and the row numbers) anchored on screen while you scroll horizontally through wide datasets.
+- **Freeze row** — right-click a row number and pick *Freeze row* to pin any row below the header as a reference while you scroll vertically. The pinned row is added above the data (it never covers a row); freezing another row replaces it, and it clears automatically when you change the filter, sort or search.
 - **Click a cell** to focus it; **double-click** to edit inline.
+- **Clickable links** — `http(s)://` URLs in a cell are underlined. A single click still selects the cell and a double-click still edits it; **Ctrl/Cmd-click** or **right-click → Open link in browser** opens the URL (right-click also offers *Copy link*). A cell can hold several space-separated URLs and each is its own link.
 
 ### Editing
 - **Inline editing** — double-click any cell to edit in place.
@@ -112,7 +114,8 @@
 - **Save** — write changes back to the file (CSV/TSV).
 
 ### Column tools
-- **Drag-to-resize** column borders. Double-click the resize handle to auto-fit.
+- **Drag-to-resize** column borders, Excel-style. **Double-click** the border to auto-fit the column to its widest value (header included).
+- **Auto-fill the view** — when a table has few enough columns to fit without horizontal scrolling, their widths are distributed proportionally so the grid fills the pane instead of leaving blank space; manually-resized columns keep the width you set.
 - **Hide/show columns** from the toolbar dropdown.
 - **Column color coding** — pastel palette makes wide tables easier to scan; selection styles adapt automatically so colours and highlights stay readable together.
 - **Copy a row or column** to the clipboard as TSV.
@@ -122,7 +125,7 @@
 - **Dataset overview** — total rows / columns / cells, null density, type distribution and a per-column summary table. One click on the chart icon in the toolbar.
 
 ### Persistence & privacy
-- **Sidecar** — column widths, hidden columns, active filters, sort, palette and rename history are saved to a tiny `.gridmaster.json` file next to your data. Reopen the file and pick up exactly where you left off.
+- **Sidecar** — column widths, hidden columns, active filters, sort, column order, frozen columns, frozen row, palette and rename history are saved to a tiny `.gridmaster.json` file next to your data. Reopen the file and pick up exactly where you left off.
 - **Live status bar** — the bar at the bottom shows file type and size, total / filtered / visible rows and columns, the active cell address with its value, and the size of the current range selection.
 - **100% offline** — files are never uploaded. No telemetry, no network requests. Parquet and Arrow WASM are bundled inside the extension.
 
