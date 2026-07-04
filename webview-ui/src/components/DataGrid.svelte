@@ -61,6 +61,26 @@
   // causing the last rows to be positioned off-screen and an infinite-scroll loop.
   const displayStartRow = $derived(startRow);
 
+  // Pixel offset for the virtualized rows block.
+  //
+  // Non-compressed: content height == realTotalHeight, so the rows sit at their
+  // real row offset (startRow * ROW_HEIGHT).
+  //
+  // Compressed: the scroller content is capped at virtualTotalHeight (33M px)
+  // while startRow ranges over the full dataset (up to maxDataStart). Using the
+  // real row offset would translate the rows far below the capped content
+  // (e.g. 42M px inside a 33M px sizer), pushing them off-screen — the block
+  // blanks out progressively as you scroll. Instead, anchor the rows to the
+  // current scroll position so the row selected by scrollRatio lands at the top
+  // of the viewport (with OVERSCAN rows above it).
+  const displayOffsetPx = $derived.by(() => {
+    if (!compressedScroll) return displayStartRow * ROW_HEIGHT;
+    if (isAtEnd || isNearBottom) {
+      return Math.max(0, virtualTotalHeight - visibleRowCount * ROW_HEIGHT);
+    }
+    return Math.max(0, scrollTop - OVERSCAN * ROW_HEIGHT);
+  });
+
   $effect(() => {
     gridStore.updateViewport(startRow, endRow);
   });
@@ -511,7 +531,7 @@
       </div>
 
       <!-- Virtualized rows -->
-      <div class="grid-rows" style="transform: translateY({HEADER_HEIGHT + displayStartRow * ROW_HEIGHT}px);">
+      <div class="grid-rows" style="transform: translateY({HEADER_HEIGHT + displayOffsetPx}px);">
         {#each Array(rowCount) as _, i}
           {@const row = startRow + i}
           {@const rowSel = isRowSelected(row)}
